@@ -77,6 +77,47 @@ def send_gripper_target(robot, position: float) -> None:
     robot.update_gripper(position, False, True)
 
 
+def execute_job(robot, action: str, values: tuple) -> tuple[dict, str, int | None]:
+    """Perform one GUI action and return the state to display."""
+    if action == "initialize":
+        robot.launch_controller()
+        robot.launch_robot()
+    elif action == "jog":
+        joint, degrees = values
+        before, _ = robot.get_robot_state()
+        target = plan_jog(before, joint, degrees)
+        send_joint_target(robot, target)
+        after, _ = robot.get_robot_state()
+        if not command_reached_target(after, target):
+            raise RuntimeError("Joint command result is uncertain; read state before trying again")
+    elif action == "gripper":
+        position = values[0]
+        before, _ = robot.get_robot_state()
+        checked_positions(before)
+        send_gripper_target(robot, position)
+        after, _ = robot.get_robot_state()
+        if abs(after["gripper_position"] - position) > GRIPPER_TOLERANCE:
+            raise RuntimeError("Gripper target was not reached; read state before trying again")
+    elif action != "refresh":
+        raise ValueError(f"Unknown GUI action: {action}")
+
+    state, _ = robot.get_robot_state()
+    checked_positions(state)
+    if action == "jog":
+        message = f"J{values[0] + 1} moved {values[1]:+.1f}°."
+        jogged_joint = values[0]
+    elif action == "gripper":
+        message = "Gripper opened." if values[0] == 0.0 else "Gripper closed."
+        jogged_joint = None
+    elif action == "initialize":
+        message = "Controller initialized; robot state ready."
+        jogged_joint = None
+    else:
+        message = "Robot state ready."
+        jogged_joint = None
+    return state, message, jogged_joint
+
+
 class JointJoggerGUI:
     def __init__(self, root: tk.Tk, nuc_ip: str):
         self.root = root
@@ -186,35 +227,8 @@ class JointJoggerGUI:
                 if action == "quit":
                     return
                 try:
-                    if action == "initialize":
-                        robot.launch_controller()
-                        robot.launch_robot()
-                    elif action == "jog":
-                        joint, degrees = values
-                        before, _ = robot.get_robot_state()
-                        target = plan_jog(before, joint, degrees)
-                        send_joint_target(robot, target)
-                        after, _ = robot.get_robot_state()
-                        if not command_reached_target(after, target):
-                            raise RuntimeError("Joint command result is uncertain; read state before trying again")
-                    elif action == "gripper":
-                        position = values[0]
-                        before, _ = robot.get_robot_state()
-                        checked_positions(before)
-                        send_gripper_target(robot, position)
-                        after, _ = robot.get_robot_state()
-                        if abs(after["gripper_position"] - position) > GRIPPER_TOLERANCE:
-                            raise RuntimeError("Gripper target was not reached; read state before trying again")
-
-                    state, _ = robot.get_robot_state()
-                    checked_positions(state)
-                    message = {
-                        "refresh": "Robot state ready.",
-                        "initialize": "Controller initialized; robot state ready.",
-                        "jog": f"J{values[0] + 1} moved {values[1]:+.1f}°.",
-                        "gripper": "Gripper opened." if values[0] == 0.0 else "Gripper closed.",
-                    }[action]
-                    self.events.put(("ok", state, message, values[0] if action == "jog" else None))
+                    state, message, jogged_joint = execute_job(robot, action, tuple(values))
+                    self.events.put(("ok", state, message, jogged_joint))
                 except Exception as exc:
                     self.events.put(("error", str(exc)))
         except Exception as exc:

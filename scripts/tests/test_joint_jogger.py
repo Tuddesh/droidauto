@@ -4,6 +4,7 @@ import unittest
 from scripts.joint_jogger import (
     PANDA_LIMITS,
     command_reached_target,
+    execute_job,
     plan_jog,
     send_gripper_target,
     send_joint_target,
@@ -14,7 +15,33 @@ def state(positions=None, velocities=None):
     return {
         "joint_positions": positions or [0, 0, 0, -1.5, 0, 1.5, 0],
         "joint_velocities": velocities or [0] * 7,
+        "gripper_position": 0.0,
+        "prev_command_successful": True,
     }
+
+
+class FakeRobot:
+    def __init__(self):
+        self.current = state()
+        self.calls = []
+
+    def get_robot_state(self):
+        self.calls.append("get_robot_state")
+        return self.current, {}
+
+    def launch_controller(self):
+        self.calls.append("launch_controller")
+
+    def launch_robot(self):
+        self.calls.append("launch_robot")
+
+    def update_joints(self, target, velocity, blocking):
+        self.calls.append(("update_joints", velocity, blocking))
+        self.current["joint_positions"] = list(target)
+
+    def update_gripper(self, position, velocity, blocking):
+        self.calls.append(("update_gripper", velocity, blocking))
+        self.current["gripper_position"] = position
 
 
 class JointJoggerTests(unittest.TestCase):
@@ -73,6 +100,33 @@ class JointJoggerTests(unittest.TestCase):
         self.assertEqual(robot.args, (1.0, False, True))
         with self.assertRaises(ValueError):
             send_gripper_target(robot, 0.5)
+
+    def test_refresh_and_initialize_with_no_action_values(self):
+        robot = FakeRobot()
+        reported, message, joint = execute_job(robot, "refresh", ())
+        self.assertIs(reported, robot.current)
+        self.assertEqual(message, "Robot state ready.")
+        self.assertIsNone(joint)
+        self.assertNotIn("update_joints", robot.calls)
+
+        _, message, joint = execute_job(robot, "initialize", ())
+        self.assertEqual(message, "Controller initialized; robot state ready.")
+        self.assertIsNone(joint)
+        self.assertIn("launch_controller", robot.calls)
+        self.assertIn("launch_robot", robot.calls)
+
+    def test_jog_and_gripper_gui_actions(self):
+        robot = FakeRobot()
+        _, message, joint = execute_job(robot, "jog", (2, 0.5))
+        self.assertEqual((message, joint), ("J3 moved +0.5°.", 2))
+        self.assertAlmostEqual(robot.current["joint_positions"][2], math.radians(0.5))
+        self.assertIn(("update_joints", False, True), robot.calls)
+
+        _, message, joint = execute_job(robot, "gripper", (1.0,))
+        self.assertEqual((message, joint), ("Gripper closed.", None))
+        self.assertIn(("update_gripper", False, True), robot.calls)
+        _, message, _ = execute_job(robot, "gripper", (0.0,))
+        self.assertEqual(message, "Gripper opened.")
 
 
 if __name__ == "__main__":
