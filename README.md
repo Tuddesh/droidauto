@@ -90,17 +90,19 @@ interface and integration notes.
 
 ## Manual joint jog on the control PC
 
-`scripts/joint_jogger.py` is a small interactive test of the installed DROID
-ZeroRPC interface. It reads all seven joint angles and sends one blocking joint
-position command for each confirmed step. It does not open cameras or command
-the gripper. It connects without initializing the robot by default.
+`scripts/joint_jogger.py` is a small interactive test of the DROID ZeroRPC
+server on the NUC. It uses this repository's own environment and a direct
+ZeroRPC client; it does not import the separate `control_droid` checkout. It
+reads all seven joint angles and sends one blocking joint position command for
+each confirmed step. It does not open cameras or command the gripper. It
+connects without initializing the robot by default.
 
 On the control PC, after pulling this repository:
 
 ```bash
-cd /home/ros/drozdpat/repos/control_droid
-conda activate ./.conda
 cd /home/ros/jiraktad/droidauto
+conda env create -p ./.conda -f environment.yml  # first time only
+conda activate ./.conda
 python scripts/joint_jogger.py
 ```
 
@@ -130,17 +132,20 @@ data/                    Local datasets (ignored)
 
 ## Environment
 
-The Conda environment is named `droidauto`:
+The tracked `environment.yml` defines the project dependencies. Create its
+local Conda environment once from the repository root:
 
 ```bash
-conda activate droidauto
-python -c "import torch, torchvision; print(torch.__version__, torchvision.__version__)"
+conda env create -p ./.conda -f environment.yml
+conda activate ./.conda
 ```
 
-At setup time (2026-09-28), it contained Python 3.11.16, PyTorch
-2.14.0+cpu, and TorchVision 0.29.0+cpu. CPU is sufficient for inspection and
-smoke tests; training or low-latency VLA inference may require a suitable GPU or
-a separate inference server.
+The installed `.conda/` directory is ignored by Git. When `environment.yml`
+changes, run `conda env update -p ./.conda -f environment.yml --prune`. The
+environment includes the ZeroRPC client for the joint jogger and the NumPy,
+OpenCV, Matplotlib, and Pillow libraries used by this repository's current
+geometry and dataset inspection code. PyTorch and a policy inference runtime
+are separate, optional additions for later experiments.
 
 ## Included evaluation data
 

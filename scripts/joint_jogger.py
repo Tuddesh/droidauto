@@ -78,6 +78,11 @@ def command_reached_target(state: dict, target: list[float]) -> bool:
     )
 
 
+def send_joint_target(robot, target: list[float]) -> None:
+    """Call the installed FrankaRobot RPC with a blocking position target."""
+    robot.update_joints(target, False, True)
+
+
 def show_state(state: dict) -> None:
     positions = checked_positions(state)
     print("Joints (degrees): " + "  ".join(
@@ -98,15 +103,17 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # Import only after argument parsing so --help works without the DROID env.
-    import numpy as np
-    from droid.misc.server_interface import ServerInterface
+    # The NUC runs DROID. This workstation needs only the ZeroRPC transport.
+    import zerorpc
 
     print(f"Connecting to DROID at tcp://{args.nuc_ip}:4242")
-    if args.initialize:
-        print("Initializing the NUC controller and robot interface...")
-    robot = ServerInterface(ip_address=args.nuc_ip, launch=args.initialize)
+    robot = zerorpc.Client(heartbeat=20)
     try:
+        robot.connect(f"tcp://{args.nuc_ip}:4242")
+        if args.initialize:
+            print("Initializing the NUC controller and robot interface...")
+            robot.launch_controller()
+            robot.launch_robot()
         state, _ = robot.get_robot_state()
         show_state(state)
         print("Enter 'joint signed-degrees' (example: 3 +0.5), 'state', or 'q'.")
@@ -155,14 +162,14 @@ def main() -> int:
                 print("No move: joint positions changed during confirmation.")
                 continue
 
-            robot.update_joints(np.asarray(target, dtype=float), velocity=False, blocking=True)
+            send_joint_target(robot, target)
             after, _ = robot.get_robot_state()
             show_state(after)
             if not command_reached_target(after, target):
                 print("Command outcome is uncertain or target was not reached; stopping.", file=sys.stderr)
                 return 1
     finally:
-        robot.server.close()
+        robot.close()
 
 
 if __name__ == "__main__":

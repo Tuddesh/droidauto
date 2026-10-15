@@ -6,6 +6,7 @@ from scripts.joint_jogger import (
     command_reached_target,
     parse_jog,
     plan_jog,
+    send_joint_target,
 )
 
 
@@ -51,6 +52,16 @@ class JointJoggerTests(unittest.TestCase):
         response["joint_positions"][6] = 0
         response["prev_command_successful"] = False
         self.assertFalse(command_reached_target(response, target))
+
+    def test_rpc_sends_plain_joint_list_as_blocking_position(self):
+        class FakeRobot:
+            def update_joints(self, *args):
+                self.args = args
+
+        robot = FakeRobot()
+        target = state()["joint_positions"]
+        send_joint_target(robot, target)
+        self.assertEqual(robot.args, (target, False, True))
 
 
 if __name__ == "__main__":

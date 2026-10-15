@@ -1,0 +1,13 @@
+name: droidauto
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - numpy>=2,<3
+  - opencv>=4.10,<5
+  - matplotlib
+  - pillow
+  - pip
+  - pip:
+      - zerorpc==0.6.3
