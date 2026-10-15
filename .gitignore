@@ -1,0 +1,46 @@
+# Local datasets, captures, model outputs, and checkpoints
+/data/
+/object_detector/
+**/datasets/
+**/models/
+**/checkpoints/
+**/runs/
+**/outputs/
+**/wandb/
+*.pt
+*.pth
+*.ckpt
+*.h5
+*.hdf5
+*.npz
+*.npy
+*.svo
+*.svo2
+*.mp4
+
+# Generated photos, meshes, and marker images
+/buffer/tests/photos/**
+!/buffer/tests/photos/**/
+!/buffer/tests/photos/**/.gitkeep
+/openscad/gridfinity/aruko_square/img/
+/openscad/gridfinity/aruko_square/output/
+*.stl
+
+# Python, local environments, tools, and editor state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.conda/
+.venv/
+venv/
+.env
+.env.*
+.vscode/
+.idea/
+
+# Unrelated local scratch script
+/geometrie.py
