@@ -29,6 +29,7 @@ TARGET_TOLERANCE_RAD = math.radians(1.0)
 GRIPPER_TOLERANCE = 0.15
 MAX_STATE_AGE_S = 5.0
 STATE_SAMPLE_INTERVAL_S = 0.15
+RELAUNCH_READY_TIMEOUT_S = 30.0
 
 
 def _read_timestamped_state(robot) -> tuple[dict, float]:
@@ -109,6 +110,28 @@ def send_gripper_target(robot, position: float) -> None:
     robot.update_gripper(position, False, True)
 
 
+def relaunch_controller(robot) -> dict:
+    """Restart the NUC controllers once, then wait for live, still robot feedback."""
+    robot.launch_controller()
+    deadline = time.monotonic() + RELAUNCH_READY_TIMEOUT_S
+    while True:
+        try:
+            robot.launch_robot()
+            break
+        except Exception as exc:
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"Robot interface did not reconnect after relaunch: {exc}") from exc
+            time.sleep(1)
+
+    while True:
+        try:
+            return read_fresh_state(robot)
+        except Exception as exc:
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"Controller relaunched, but live robot state is unavailable: {exc}") from exc
+            time.sleep(1)
+
+
 def execute_job(robot, action: str, values: tuple) -> tuple[dict, str, int | None]:
     """Perform one GUI action and return the state to display."""
     if action == "jog":
@@ -128,6 +151,8 @@ def execute_job(robot, action: str, values: tuple) -> tuple[dict, str, int | Non
             raise RuntimeError("Gripper target was not reached; read state before trying again")
     elif action == "refresh":
         state = read_fresh_state(robot)
+    elif action == "relaunch":
+        state = relaunch_controller(robot)
     else:
         raise ValueError(f"Unknown GUI action: {action}")
 
@@ -136,6 +161,9 @@ def execute_job(robot, action: str, values: tuple) -> tuple[dict, str, int | Non
         jogged_joint = values[0]
     elif action == "gripper":
         message = "Gripper opened." if values[0] == 0.0 else "Gripper closed."
+        jogged_joint = None
+    elif action == "relaunch":
+        message = "Controller relaunched; live robot state ready."
         jogged_joint = None
     else:
         message = "Robot state ready."
@@ -189,6 +217,8 @@ class JointJoggerGUI:
         controls.grid(row=9, column=0, columnspan=4, sticky="ew", pady=(14, 6))
         self.refresh_button = ttk.Button(controls, text="Read state", command=lambda: self.submit("refresh"))
         self.refresh_button.pack(side="left", padx=(0, 8))
+        self.relaunch_button = ttk.Button(controls, text="Relaunch controller", command=self.relaunch)
+        self.relaunch_button.pack(side="left", padx=(0, 8))
         self.open_button = ttk.Button(controls, text="Open gripper", command=lambda: self.submit("gripper", 0.0))
         self.open_button.pack(side="left", padx=(0, 8))
         self.close_button = ttk.Button(controls, text="Close gripper", command=lambda: self.submit("gripper", 1.0))
@@ -206,6 +236,7 @@ class JointJoggerGUI:
 
     def set_controls(self) -> None:
         self.refresh_button.configure(state="disabled" if self.busy else "normal")
+        self.relaunch_button.configure(state="disabled" if self.busy else "normal")
         for button in (*self.jog_buttons, self.open_button, self.close_button):
             button.configure(state="normal" if self.ready and not self.busy else "disabled")
 
@@ -213,8 +244,12 @@ class JointJoggerGUI:
         if self.busy:
             return
         self.busy = True
+        if action == "relaunch":
+            self.ready = False
+            self.clear_state_display()
         self.status.configure(text={
             "refresh": "Reading robot state...",
+            "relaunch": "Relaunching NUC controller and waiting for live robot state...",
             "jog": "Sending joint command...",
             "gripper": "Sending gripper command...",
         }[action])
@@ -227,6 +262,20 @@ class JointJoggerGUI:
             self.status.configure(text="Set a nonzero step before clicking Jog.")
             return
         self.submit("jog", joint, degrees)
+
+    def relaunch(self) -> None:
+        if messagebox.askyesno(
+            "Relaunch DROID controller",
+            "Restart the NUC arm and gripper controllers? This interrupts any active robot control. "
+            "Make sure the robot workspace is clear before continuing.",
+            parent=self.root,
+        ):
+            self.submit("relaunch")
+
+    def clear_state_display(self) -> None:
+        for joint, label in enumerate(self.position_labels, 1):
+            label.configure(text=f"J{joint}: --°")
+        self.gripper_label.configure(text="Gripper: --")
 
     def worker(self) -> None:
         robot = None
@@ -268,9 +317,7 @@ class JointJoggerGUI:
                 self.status.configure(text=message)
             else:
                 self.ready = False
-                for joint, label in enumerate(self.position_labels, 1):
-                    label.configure(text=f"J{joint}: --°")
-                self.gripper_label.configure(text="Gripper: --")
+                self.clear_state_display()
                 self.status.configure(text=f"Stopped: {event[1]}")
             self.set_controls()
         self.root.after(100, self.drain_events)

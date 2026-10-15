@@ -95,7 +95,8 @@ on the NUC. It uses this repository's own environment and a direct ZeroRPC
 client; it does not import the separate `control_droid` checkout. It displays
 all seven joint angles, provides a slider and Jog button for each joint, and
 has Open gripper and Close gripper buttons. It does not open cameras or
-initialize the robot automatically.
+initialize the robot automatically. Relaunch controller explicitly restarts
+the NUC arm and gripper controllers after a confirmation dialog.
 
 Run it from this PC or any other machine that can reach the NUC on port 4242.
 From the `droidauto` checkout:
@@ -112,15 +113,19 @@ position. Click a joint's Jog button to send that step. Slider movement alone
 sends no robot command. Use Read state to refresh the displayed angles. The
 gripper buttons send fully open (0) or fully closed (1) commands.
 
+If the NUC responds with frozen robot feedback, click Relaunch controller only
+when the robot workspace is clear and no other control session is active. The
+button calls DROID's `launch_controller()` followed by `launch_robot()`, then
+waits for fresh robot state before enabling motion. A failed relaunch leaves
+motion disabled and reports the error in the GUI.
+
 The script accepts steps of at most one degree, rejects a target within five
 degrees of a configured Panda joint limit, and checks that the arm is still
 before sending a command. It requires recent robot timestamps that advance
 between two state reads, and disables motion buttons if feedback is stale,
 unavailable, or a command outcome is uncertain. Read state must succeed before
-motion is available again. If feedback is stale or times out, diagnose the NUC
-robot service and its connection to the arm; this GUI does not restart the
-controller. These checks do not
-establish collision clearance or make the tool suitable for unattended use;
+motion is available again. These checks do not establish collision clearance
+or make the tool suitable for unattended use;
 inspect the robot's workspace and use it with an operator at the station.
 
 ## Repository layout
