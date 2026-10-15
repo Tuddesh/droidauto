@@ -7,6 +7,7 @@ import argparse
 import math
 import queue
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -26,6 +27,37 @@ LIMIT_MARGIN_RAD = math.radians(5.0)
 STILL_VELOCITY_RAD_S = 0.05
 TARGET_TOLERANCE_RAD = math.radians(1.0)
 GRIPPER_TOLERANCE = 0.15
+MAX_STATE_AGE_S = 5.0
+STATE_SAMPLE_INTERVAL_S = 0.15
+
+
+def _read_timestamped_state(robot) -> tuple[dict, float]:
+    state, stamp = robot.get_robot_state()
+    try:
+        seconds = float(stamp["robot_timestamp_seconds"])
+        nanos = float(stamp["robot_timestamp_nanos"])
+        if not math.isfinite(seconds) or not math.isfinite(nanos) or not 0 <= nanos < 1e9:
+            raise ValueError
+    except (TypeError, KeyError, ValueError) as exc:
+        raise ValueError("Robot state has no valid timestamp; jogging disabled") from exc
+    age = time.time() - (seconds + nanos * 1e-9)
+    if not -MAX_STATE_AGE_S <= age <= MAX_STATE_AGE_S:
+        raise ValueError(
+            f"Robot state is stale or clocks differ by {age:.1f} seconds; jogging disabled. "
+            "Check the NUC robot service and its clock."
+        )
+    checked_positions(state)
+    return state, seconds + nanos * 1e-9
+
+
+def read_fresh_state(robot) -> dict:
+    """Require two recent robot samples with an advancing robot timestamp."""
+    _, first_stamp = _read_timestamped_state(robot)
+    time.sleep(STATE_SAMPLE_INTERVAL_S)
+    state, second_stamp = _read_timestamped_state(robot)
+    if second_stamp <= first_stamp:
+        raise ValueError("Robot timestamp did not advance between reads; jogging disabled")
+    return state
 
 
 def checked_positions(state: dict) -> list[float]:
@@ -79,38 +111,31 @@ def send_gripper_target(robot, position: float) -> None:
 
 def execute_job(robot, action: str, values: tuple) -> tuple[dict, str, int | None]:
     """Perform one GUI action and return the state to display."""
-    if action == "initialize":
-        robot.launch_controller()
-        robot.launch_robot()
-    elif action == "jog":
+    if action == "jog":
         joint, degrees = values
-        before, _ = robot.get_robot_state()
+        before = read_fresh_state(robot)
         target = plan_jog(before, joint, degrees)
         send_joint_target(robot, target)
-        after, _ = robot.get_robot_state()
-        if not command_reached_target(after, target):
+        state = read_fresh_state(robot)
+        if not command_reached_target(state, target):
             raise RuntimeError("Joint command result is uncertain; read state before trying again")
     elif action == "gripper":
         position = values[0]
-        before, _ = robot.get_robot_state()
-        checked_positions(before)
+        read_fresh_state(robot)
         send_gripper_target(robot, position)
-        after, _ = robot.get_robot_state()
-        if abs(after["gripper_position"] - position) > GRIPPER_TOLERANCE:
+        state = read_fresh_state(robot)
+        if abs(state["gripper_position"] - position) > GRIPPER_TOLERANCE:
             raise RuntimeError("Gripper target was not reached; read state before trying again")
-    elif action != "refresh":
+    elif action == "refresh":
+        state = read_fresh_state(robot)
+    else:
         raise ValueError(f"Unknown GUI action: {action}")
 
-    state, _ = robot.get_robot_state()
-    checked_positions(state)
     if action == "jog":
         message = f"J{values[0] + 1} moved {values[1]:+.1f}°."
         jogged_joint = values[0]
     elif action == "gripper":
         message = "Gripper opened." if values[0] == 0.0 else "Gripper closed."
-        jogged_joint = None
-    elif action == "initialize":
-        message = "Controller initialized; robot state ready."
         jogged_joint = None
     else:
         message = "Robot state ready."
@@ -134,7 +159,7 @@ class JointJoggerGUI:
         frame.grid()
 
         ttk.Label(frame, text=f"DROID NUC: {nuc_ip}:4242").grid(row=0, column=0, columnspan=4, sticky="w")
-        ttk.Label(frame, text="Drag a slider to choose a step; click Jog to move one joint.").grid(
+        ttk.Label(frame, text="Current angles at left; sliders choose a relative step (0° means no move).").grid(
             row=1, column=0, columnspan=4, sticky="w", pady=(4, 12)
         )
 
@@ -150,7 +175,7 @@ class JointJoggerGUI:
             slider = tk.Scale(
                 frame, from_=-MAX_STEP_DEG, to=MAX_STEP_DEG,
                 orient=tk.HORIZONTAL, resolution=0.1, length=310,
-                label="step in degrees", showvalue=True,
+                label="relative step in degrees", showvalue=True,
             )
             slider.set(0)
             slider.grid(row=row, column=1, columnspan=2, padx=8)
@@ -164,8 +189,6 @@ class JointJoggerGUI:
         controls.grid(row=9, column=0, columnspan=4, sticky="ew", pady=(14, 6))
         self.refresh_button = ttk.Button(controls, text="Read state", command=lambda: self.submit("refresh"))
         self.refresh_button.pack(side="left", padx=(0, 8))
-        self.init_button = ttk.Button(controls, text="Initialize controller", command=self.initialize)
-        self.init_button.pack(side="left", padx=(0, 8))
         self.open_button = ttk.Button(controls, text="Open gripper", command=lambda: self.submit("gripper", 0.0))
         self.open_button.pack(side="left", padx=(0, 8))
         self.close_button = ttk.Button(controls, text="Close gripper", command=lambda: self.submit("gripper", 1.0))
@@ -182,8 +205,7 @@ class JointJoggerGUI:
         root.after(100, self.drain_events)
 
     def set_controls(self) -> None:
-        for button in (self.refresh_button, self.init_button):
-            button.configure(state="disabled" if self.busy else "normal")
+        self.refresh_button.configure(state="disabled" if self.busy else "normal")
         for button in (*self.jog_buttons, self.open_button, self.close_button):
             button.configure(state="normal" if self.ready and not self.busy else "disabled")
 
@@ -193,7 +215,6 @@ class JointJoggerGUI:
         self.busy = True
         self.status.configure(text={
             "refresh": "Reading robot state...",
-            "initialize": "Initializing controller and robot interface...",
             "jog": "Sending joint command...",
             "gripper": "Sending gripper command...",
         }[action])
@@ -206,14 +227,6 @@ class JointJoggerGUI:
             self.status.configure(text="Set a nonzero step before clicking Jog.")
             return
         self.submit("jog", joint, degrees)
-
-    def initialize(self) -> None:
-        if messagebox.askyesno(
-            "Initialize DROID controller",
-            "This will start or restart the NUC robot controller. Continue?",
-            parent=self.root,
-        ):
-            self.submit("initialize")
 
     def worker(self) -> None:
         robot = None
@@ -255,6 +268,9 @@ class JointJoggerGUI:
                 self.status.configure(text=message)
             else:
                 self.ready = False
+                for joint, label in enumerate(self.position_labels, 1):
+                    label.configure(text=f"J{joint}: --°")
+                self.gripper_label.configure(text="Gripper: --")
                 self.status.configure(text=f"Stopped: {event[1]}")
             self.set_controls()
         self.root.after(100, self.drain_events)

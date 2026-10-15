@@ -106,17 +106,20 @@ conda activate ./.conda
 python scripts/joint_jogger.py
 ```
 
-Drag a joint's slider to choose a step between -1° and +1°, then click that
-joint's Jog button. Slider movement alone sends no robot command. Use Read
-state to refresh the displayed angles. The gripper buttons send fully open
-(0) or fully closed (1) commands. If the NUC server is listening but its
-controller and robot interface have not been initialized, click Initialize
-controller; this explicitly starts or restarts those services after a dialog.
+The numbers at the left are measured joint angles. The sliders choose relative
+steps between -1° and +1°; their center value of 0° is not the robot's current
+position. Click a joint's Jog button to send that step. Slider movement alone
+sends no robot command. Use Read state to refresh the displayed angles. The
+gripper buttons send fully open (0) or fully closed (1) commands.
 
 The script accepts steps of at most one degree, rejects a target within five
 degrees of a configured Panda joint limit, and checks that the arm is still
-before sending a command. It disables motion buttons if a command outcome or
-final position is uncertain until Read state succeeds. These checks do not
+before sending a command. It requires recent robot timestamps that advance
+between two state reads, and disables motion buttons if feedback is stale,
+unavailable, or a command outcome is uncertain. Read state must succeed before
+motion is available again. If feedback is stale or times out, diagnose the NUC
+robot service and its connection to the arm; this GUI does not restart the
+controller. These checks do not
 establish collision clearance or make the tool suitable for unattended use;
 inspect the robot's workspace and use it with an operator at the station.
 

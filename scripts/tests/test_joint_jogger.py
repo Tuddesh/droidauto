@@ -1,4 +1,5 @@
 import math
+import time
 import unittest
 
 from scripts.joint_jogger import (
@@ -6,6 +7,7 @@ from scripts.joint_jogger import (
     command_reached_target,
     execute_job,
     plan_jog,
+    read_fresh_state,
     send_gripper_target,
     send_joint_target,
 )
@@ -27,13 +29,12 @@ class FakeRobot:
 
     def get_robot_state(self):
         self.calls.append("get_robot_state")
-        return self.current, {}
-
-    def launch_controller(self):
-        self.calls.append("launch_controller")
-
-    def launch_robot(self):
-        self.calls.append("launch_robot")
+        now = time.time()
+        seconds = int(now)
+        return self.current, {
+            "robot_timestamp_seconds": seconds,
+            "robot_timestamp_nanos": int((now - seconds) * 1e9),
+        }
 
     def update_joints(self, target, velocity, blocking):
         self.calls.append(("update_joints", velocity, blocking))
@@ -101,7 +102,7 @@ class JointJoggerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             send_gripper_target(robot, 0.5)
 
-    def test_refresh_and_initialize_with_no_action_values(self):
+    def test_refresh_with_no_action_values(self):
         robot = FakeRobot()
         reported, message, joint = execute_job(robot, "refresh", ())
         self.assertIs(reported, robot.current)
@@ -109,11 +110,33 @@ class JointJoggerTests(unittest.TestCase):
         self.assertIsNone(joint)
         self.assertNotIn("update_joints", robot.calls)
 
-        _, message, joint = execute_job(robot, "initialize", ())
-        self.assertEqual(message, "Controller initialized; robot state ready.")
-        self.assertIsNone(joint)
-        self.assertIn("launch_controller", robot.calls)
-        self.assertIn("launch_robot", robot.calls)
+    def test_stale_or_frozen_state_disables_motion(self):
+        class FrozenRobot(FakeRobot):
+            def __init__(self, age):
+                super().__init__()
+                now = time.time() - age
+                seconds = int(now)
+                self.stamp = {
+                    "robot_timestamp_seconds": seconds,
+                    "robot_timestamp_nanos": int((now - seconds) * 1e9),
+                }
+
+            def get_robot_state(self):
+                return self.current, self.stamp
+
+        for age, error in ((60, "stale"), (0, "did not advance")):
+            with self.subTest(age=age):
+                robot = FrozenRobot(age)
+                with self.assertRaisesRegex(ValueError, error):
+                    execute_job(robot, "jog", (0, 0.5))
+                self.assertNotIn(("update_joints", False, True), robot.calls)
+                self.assertNotIn(("update_gripper", False, True), robot.calls)
+
+    def test_missing_timestamp_disables_motion(self):
+        robot = FakeRobot()
+        robot.get_robot_state = lambda: (robot.current, {})
+        with self.assertRaisesRegex(ValueError, "no valid timestamp"):
+            read_fresh_state(robot)
 
     def test_jog_and_gripper_gui_actions(self):
         robot = FakeRobot()
