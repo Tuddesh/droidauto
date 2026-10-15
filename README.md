@@ -88,6 +88,35 @@ interface and integration notes.
 - Gridfinity fixtures and generated ArUco markers under `openscad/`.
 - Mask R-CNN, synthetic-data, and YCB-V perception experiments.
 
+## Manual joint jog on the control PC
+
+`scripts/joint_jogger.py` is a small interactive test of the installed DROID
+ZeroRPC interface. It reads all seven joint angles and sends one blocking joint
+position command for each confirmed step. It does not open cameras or command
+the gripper. It connects without initializing the robot by default.
+
+On the control PC, after pulling this repository:
+
+```bash
+cd /home/ros/drozdpat/repos/control_droid
+conda activate ./.conda
+cd /home/ros/jiraktad/droidauto
+python scripts/joint_jogger.py
+```
+
+If the NUC server is listening but its controller and robot interface have not
+been initialized, run with `--initialize`. That option explicitly starts or
+restarts those services. At the `jog>` prompt, enter `state` to refresh the
+readout, `3 +0.5` to propose a positive half-degree step on joint 3, or `q`
+to quit. A move requires typing `move` at the following confirmation prompt.
+
+The script accepts steps of at most one degree, rejects a target within five
+degrees of a configured Panda joint limit, and checks that the arm is still
+before sending a command. It stops if the reported command outcome or final
+position is uncertain. These checks do not establish collision clearance or
+make the tool suitable for unattended use; inspect the robot's workspace and
+use it with an operator at the station.
+
 ## Repository layout
 
 ```text
