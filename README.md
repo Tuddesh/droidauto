@@ -88,36 +88,37 @@ interface and integration notes.
 - Gridfinity fixtures and generated ArUco markers under `openscad/`.
 - Mask R-CNN, synthetic-data, and YCB-V perception experiments.
 
-## Manual joint jog on the control PC
+## Manual joint jog
 
-`scripts/joint_jogger.py` is a small interactive test of the DROID ZeroRPC
-server on the NUC. It uses this repository's own environment and a direct
-ZeroRPC client; it does not import the separate `control_droid` checkout. It
-reads all seven joint angles and sends one blocking joint position command for
-each confirmed step. It does not open cameras or command the gripper. It
-connects without initializing the robot by default.
+`scripts/joint_jogger.py` is a small GUI for testing the DROID ZeroRPC server
+on the NUC. It uses this repository's own environment and a direct ZeroRPC
+client; it does not import the separate `control_droid` checkout. It displays
+all seven joint angles, provides a slider and Jog button for each joint, and
+has Open gripper and Close gripper buttons. It does not open cameras or
+initialize the robot automatically.
 
-On the control PC, after pulling this repository:
+Run it from this PC or any other machine that can reach the NUC on port 4242.
+From the `droidauto` checkout:
 
 ```bash
-cd /home/ros/jiraktad/droidauto
 conda env create -p ./.conda -f environment.yml  # first time only
 conda activate ./.conda
 python scripts/joint_jogger.py
 ```
 
-If the NUC server is listening but its controller and robot interface have not
-been initialized, run with `--initialize`. That option explicitly starts or
-restarts those services. At the `jog>` prompt, enter `state` to refresh the
-readout, `3 +0.5` to propose a positive half-degree step on joint 3, or `q`
-to quit. A move requires typing `move` at the following confirmation prompt.
+Drag a joint's slider to choose a step between -1° and +1°, then click that
+joint's Jog button. Slider movement alone sends no robot command. Use Read
+state to refresh the displayed angles. The gripper buttons send fully open
+(0) or fully closed (1) commands. If the NUC server is listening but its
+controller and robot interface have not been initialized, click Initialize
+controller; this explicitly starts or restarts those services after a dialog.
 
 The script accepts steps of at most one degree, rejects a target within five
 degrees of a configured Panda joint limit, and checks that the arm is still
-before sending a command. It stops if the reported command outcome or final
-position is uncertain. These checks do not establish collision clearance or
-make the tool suitable for unattended use; inspect the robot's workspace and
-use it with an operator at the station.
+before sending a command. It disables motion buttons if a command outcome or
+final position is uncertain until Read state succeeds. These checks do not
+establish collision clearance or make the tool suitable for unattended use;
+inspect the robot's workspace and use it with an operator at the station.
 
 ## Repository layout
 
@@ -142,7 +143,7 @@ conda activate ./.conda
 
 The installed `.conda/` directory is ignored by Git. When `environment.yml`
 changes, run `conda env update -p ./.conda -f environment.yml --prune`. The
-environment includes the ZeroRPC client for the joint jogger and the NumPy,
+environment includes the ZeroRPC client and Tk GUI for the joint jogger, and the NumPy,
 OpenCV, Matplotlib, and Pillow libraries used by this repository's current
 geometry and dataset inspection code. PyTorch and a policy inference runtime
 are separate, optional additions for later experiments.

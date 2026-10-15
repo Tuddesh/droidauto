@@ -4,8 +4,8 @@ import unittest
 from scripts.joint_jogger import (
     PANDA_LIMITS,
     command_reached_target,
-    parse_jog,
     plan_jog,
+    send_gripper_target,
     send_joint_target,
 )
 
@@ -19,16 +19,14 @@ def state(positions=None, velocities=None):
 
 class JointJoggerTests(unittest.TestCase):
     def test_valid_step_changes_only_selected_joint(self):
-        joint, degrees = parse_jog("3 +0.5")
-        target = plan_jog(state(), joint, degrees)
-        self.assertEqual(joint, 2)
+        target = plan_jog(state(), 2, 0.5)
         self.assertAlmostEqual(target[2], math.radians(0.5))
         self.assertEqual(target[:2] + target[3:], state()["joint_positions"][:2] + state()["joint_positions"][3:])
 
     def test_rejects_oversize_and_nonfinite_steps(self):
-        for command in ("1 +1.01", "2 nan", "3 inf", "4 0", "8 +0.5"):
-            with self.subTest(command=command), self.assertRaises(ValueError):
-                parse_jog(command)
+        for joint, degrees in ((0, 1.01), (1, math.nan), (2, math.inf), (3, 0), (7, 0.5)):
+            with self.subTest(joint=joint, degrees=degrees), self.assertRaises(ValueError):
+                plan_jog(state(), joint, degrees)
 
     def test_rejects_target_near_joint_limit(self):
         positions = state()["joint_positions"]
@@ -62,6 +60,19 @@ class JointJoggerTests(unittest.TestCase):
         target = state()["joint_positions"]
         send_joint_target(robot, target)
         self.assertEqual(robot.args, (target, False, True))
+
+    def test_gripper_buttons_send_blocking_position_commands(self):
+        class FakeRobot:
+            def update_gripper(self, *args):
+                self.args = args
+
+        robot = FakeRobot()
+        send_gripper_target(robot, 0.0)
+        self.assertEqual(robot.args, (0.0, False, True))
+        send_gripper_target(robot, 1.0)
+        self.assertEqual(robot.args, (1.0, False, True))
+        with self.assertRaises(ValueError):
+            send_gripper_target(robot, 0.5)
 
 
 if __name__ == "__main__":

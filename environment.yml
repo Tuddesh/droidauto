@@ -4,6 +4,7 @@ channels:
   - nodefaults
 dependencies:
   - python=3.11
+  - tk
   - numpy>=2,<3
   - opencv>=4.10,<5
   - matplotlib
