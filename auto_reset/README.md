@@ -100,6 +100,11 @@ intrinsics or wrist hand-eye geometry. We reuse native ZED intrinsics and the
 existing DROID `calibration_info.json` entry for the selected serial/view.
 That entry must describe the same tool and camera mounting as the current
 robot. No camera-to-tool transform is guessed or copied into code.
+All-zero identity entries and identical left/right camera-to-tool entries are
+rejected as invalid for this wrist-camera setup. A JSON entry's presence alone
+does not establish that hand-eye calibration has been performed. One buffer
+image estimates buffer-to-camera geometry; it does not determine an unknown
+camera-to-tool transform.
 
 Pressing Calibrate establishes the operator's assertion that the arm is
 stationary. Manual capture reads the tool pose once and applies no timestamp,

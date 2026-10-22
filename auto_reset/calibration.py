@@ -92,7 +92,15 @@ def load_hand_eye(path, serial: str, view: str) -> np.ndarray:
     data = json.loads(Path(path).read_text())
     if key not in data:
         raise ValueError(f"No hand-eye calibration for {key} in {path}")
-    return pose_to_transform(data[key]["pose"])
+    result = pose_to_transform(data[key]["pose"])
+    if np.allclose(result, np.eye(4), atol=1e-12, rtol=0):
+        raise ValueError(f"Hand-eye entry {key} is an all-zero identity placeholder; "
+                         "a measured wrist-camera-to-tool transform is required")
+    sibling = f"{serial}_{'right' if view == 'left' else 'left'}"
+    if sibling in data and np.allclose(result, pose_to_transform(data[sibling]["pose"]), atol=1e-12, rtol=0):
+        raise ValueError(f"Hand-eye entries {key} and {sibling} are identical; "
+                         "separate stereo eyes cannot have the same camera-to-tool pose")
+    return result
 
 
 def capture_calibration(config, robot, camera, report=None) -> BufferCalibration:
