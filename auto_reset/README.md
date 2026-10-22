@@ -101,9 +101,12 @@ existing DROID `calibration_info.json` entry for the selected serial/view.
 That entry must describe the same tool and camera mounting as the current
 robot. No camera-to-tool transform is guessed or copied into code.
 
-The image is bracketed by fresh stationary robot feedback. Capture rejects
-stale images, movement, missing hand-eye calibration, insufficient visible
-markers and excessive reprojection error. Detection and PnP remain inside
+Pressing Calibrate establishes the operator's assertion that the arm is
+stationary. Manual capture reads the tool pose once and applies no timestamp,
+clock-offset, frame-age, timestamp-advance, or velocity/stationarity gates.
+Timestamps are retained as metadata. Capture still rejects missing hand-eye
+calibration, insufficient visible markers and excessive reprojection error.
+Detection and pose fitting remain inside
 `Buffer.localize()`. One image can contain multiple markers; the example
 requires two per accepted eye. Known cells allow targets for every configured marker even if
 some are not visible. A low reprojection error cannot establish physical

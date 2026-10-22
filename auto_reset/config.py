@@ -42,7 +42,7 @@ class StationConfig:
             raise ValueError("Tracking distance bound must be at least the arrival tolerance")
         if self.motion["max_tracking_error_rad"] < self.motion["rotation_tolerance_rad"]:
             raise ValueError("Tracking rotation bound must be at least the arrival tolerance")
-        for name in ("max_reprojection_rms_px", "max_capture_age_s"):
+        for name in ("max_reprojection_rms_px",):
             positive(self.camera[name], name)
         if self.camera["view"] not in ("left", "right", "stereo"):
             raise ValueError("camera.view must be left, right or stereo")

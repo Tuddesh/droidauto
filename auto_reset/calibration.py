@@ -101,24 +101,13 @@ def capture_calibration(config, robot, camera, report=None) -> BufferCalibration
     Each eye uses its own intrinsics and hand-eye transform. Pixel fit is
     checked per eye; stereo agreement is checked after conversion to base.
     """
-    before = robot.require_stationary()
+    base_tool, robot_timestamps = robot.read_calibration_pose()
     stereo = config.camera["view"] == "stereo"
     print("Capturing one stationary stereo pair..." if stereo else "Capturing one wrist-camera image...", flush=True)
     frames = camera.capture_pair() if stereo else [camera.capture()]
-    try:
-        after = robot.require_stationary()
-        # Record acquisition age before diagnostic PNG encoding takes any time.
-        captured_at = time.time()
-    finally:
-        if report is not None:
-            for frame in frames:
-                report.captured(frame)
-    translation, rotation = pose_error(before.tool_pose, after.tool_pose)
-    if (translation > 0.002 or rotation > 0.01
-            or np.max(np.abs(after.joints - before.joints)) > 0.005):
-        raise RuntimeError("Robot moved during capture; the image cannot establish a stationary pose")
-    if stereo and abs(frames[0].timestamp_s - frames[1].timestamp_s) > 1e-6:
-        raise RuntimeError("Stereo images do not share one capture timestamp")
+    if report is not None:
+        for frame in frames:
+            report.captured(frame)
     expected_views = {"left", "right"} if stereo else {config.camera["view"]}
     if len(frames) != len(expected_views) or {frame.view for frame in frames} != expected_views:
         raise RuntimeError("Captured views do not match the selected camera mode")
@@ -130,12 +119,6 @@ def capture_calibration(config, robot, camera, report=None) -> BufferCalibration
         eye = {"view": frame.view, "accepted": False}
         eyes[frame.view] = eye
         try:
-            age = captured_at - frame.timestamp_s
-            if not np.isfinite(age) or age < -0.05 or age > config.camera["max_capture_age_s"]:
-                raise RuntimeError("Camera frame is stale or camera/PC clocks differ")
-            if (frame.timestamp_s < before.timestamp_s - 0.05
-                    or frame.timestamp_s > after.timestamp_s + 0.05):
-                raise RuntimeError("Image timestamp falls outside the stationary robot-state interval")
             if frame.serial != str(config.camera["serial"]):
                 raise ValueError("Captured image belongs to a different camera")
             print(f"Localizing buffer in {frame.view} eye...", flush=True)
@@ -153,7 +136,7 @@ def capture_calibration(config, robot, camera, report=None) -> BufferCalibration
                 raise RuntimeError(f"RMS {quality['reprojection_rms_px']:.3f} px exceeds {config.camera['max_reprojection_rms_px']:.3f} px")
             tool_camera = load_hand_eye(config.resolve(config.camera["hand_eye_file"]),
                                        frame.serial, frame.view)
-            base_buffer = before.tool_pose @ tool_camera @ camera_buffer
+            base_buffer = base_tool @ tool_camera @ camera_buffer
             eye.update({"accepted": True, "matrix": frame.camera_matrix.tolist(),
                         "distortion": frame.distortion.tolist(), "tool_camera": tool_camera.tolist(),
                         "camera_buffer": camera_buffer.tolist(), "base_buffer": base_buffer.tolist()})
@@ -190,7 +173,7 @@ def capture_calibration(config, robot, camera, report=None) -> BufferCalibration
     base_buffer[:3, :3] = u @ np.diag([1, 1, np.linalg.det(u @ vt)]) @ vt
     fused_errors = {}
     for eye_frame, _, eye_tool_camera, _ in accepted:
-        eye_pose = np.linalg.inv(before.tool_pose @ eye_tool_camera) @ base_buffer
+        eye_pose = np.linalg.inv(base_tool @ eye_tool_camera) @ base_buffer
         rms = grids[eye_frame.view].reprojection_rms(eye_pose)
         fused_errors[eye_frame.view] = rms
         eyes[eye_frame.view]["combined_pose_rms_px"] = rms
@@ -203,7 +186,7 @@ def capture_calibration(config, robot, camera, report=None) -> BufferCalibration
     frame, _, tool_camera, _ = accepted[reference_index]
     # Store the fused pose expressed in the reference eye for the existing
     # transform-chain invariant. Actual per-eye PnP poses are retained in eyes.
-    camera_buffer = np.linalg.inv(before.tool_pose @ tool_camera) @ base_buffer
+    camera_buffer = np.linalg.inv(base_tool @ tool_camera) @ base_buffer
     quality = {
         "visible_marker_ids": sorted({i for _, _, _, q in accepted for i in q["visible_marker_ids"]}),
         "reprojection_rms_px": max(fused_errors.values()),
@@ -214,9 +197,9 @@ def capture_calibration(config, robot, camera, report=None) -> BufferCalibration
     }
     result = BufferCalibration({
         "version": 1, "created_at_s": time.time(), "image_timestamp_s": frame.timestamp_s,
-        "robot_timestamp_s": before.timestamp_s, "layout": config.layout,
+        "robot_timestamps": robot_timestamps, "stationarity": "operator_confirmed", "layout": config.layout,
         "layout_digest": config.layout_digest, "base_buffer": base_buffer.tolist(),
-        "base_tool": before.tool_pose.tolist(), "tool_camera": tool_camera.tolist(),
+        "base_tool": base_tool.tolist(), "tool_camera": tool_camera.tolist(),
         "camera_buffer": camera_buffer.tolist(), "eyes": eyes,
         "hand_eye_file": str(config.resolve(config.camera["hand_eye_file"])),
         "camera": {"serial": frame.serial, "view": config.camera["view"], "reference_view": frame.view,

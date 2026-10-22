@@ -157,7 +157,7 @@ class Window:
                     with DroidRobot(config.data["robot_endpoint"]) as robot:
                         if action == "initialize":
                             robot.initialize()
-                            robot.require_stationary()
+                            robot.read_calibration_pose()
                             self.events.put(("status", "Controllers ready. Calibrate or start the loop."))
                         elif action == "run":
                             self.run_task(config, robot, single)

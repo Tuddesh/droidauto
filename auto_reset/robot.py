@@ -74,6 +74,15 @@ class DroidRobot:
             raise RuntimeError("Arm is moving; stationary feedback is required")
         return second
 
+    def read_calibration_pose(self) -> tuple[np.ndarray, dict]:
+        """Read the tool pose for an operator-triggered stationary capture.
+
+        No age, clock synchronization, advancing-timestamp or velocity gate:
+        the operator establishes stationarity when requesting calibration.
+        """
+        state, timestamps = self._client.get_robot_state()
+        return pose_to_transform(state["cartesian_position"]), timestamps
+
     def command_pose(self, target):
         """Stream an absolute Cartesian target; leave the gripper untouched.
 

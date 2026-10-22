@@ -9,7 +9,6 @@
     "hand_eye_file": "/home/ros/drozdpat/repos/control_droid/packages/droid/droid/calibration/calibration_info.json",
     "min_visible_markers": 2,
     "max_reprojection_rms_px": 2.0,
-    "max_capture_age_s": 0.5,
     "stereo_max_position_error_m": 0.02,
     "stereo_max_rotation_error_rad": 0.1
   },

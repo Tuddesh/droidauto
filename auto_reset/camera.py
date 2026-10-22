@@ -1,7 +1,6 @@
 """Native-resolution rectified ZED images from one explicitly selected camera."""
 
 from dataclasses import dataclass
-import time
 
 import cv2
 import numpy as np
@@ -76,8 +75,6 @@ class ZedWristCamera:
         matrix = np.array([[intrinsics.fx, 0, intrinsics.cx],
                            [0, intrinsics.fy, intrinsics.cy], [0, 0, 1]], dtype=float)
         stamp = camera.get_timestamp(sl.TIME_REFERENCE.IMAGE).get_milliseconds() / 1000
-        if not np.isfinite(stamp) or stamp > time.time() + 0.5:
-            raise RuntimeError("Invalid camera timestamp; check lab PC clock")
         # LEFT/RIGHT are rectified views; raw distortion must not be applied again.
         return CameraFrame(rgb.copy(), matrix, np.zeros(5), stamp, self.serial, view)
 
