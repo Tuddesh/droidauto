@@ -68,6 +68,7 @@ grid = Buffer(
     camera_matrix=camera_matrix,
     distortion_coefficients=distortion_coefficients,
     dictionary="DICT_4X4_50",
+    marker_orientation="independent",
 )
 
 # Marker IDs and positions must match the physical buffer.
@@ -87,6 +88,12 @@ cell_center_camera_m = (
 )[:3]
 ```
 
+`marker_orientation="independent"` estimates each marker's printed rotation
+alongside the buffer pose, using at least two known visible markers. Rotations
+may be arbitrary in-plane angles; IDs still identify known cell centers.
+The legacy default `"aligned"` supports one visible marker when every printed
+top edge points along buffer +X. The reset station uses independent mode.
+
 `T_camera_buffer` is a 4×4 homogeneous transform. Its upper-left 3×3 block is
 rotation and its upper-right three values are translation. It maps a point in
 buffer coordinates to the camera frame. `localize()` uses all visible markers
@@ -95,7 +102,8 @@ cannot see a placed marker. It does not establish the robot-base frame; that
 requires a separate camera-to-robot calibration.
 
 `localize()` also sets `last_localization` to the matched `visible_marker_ids`
-and `reprojection_rms_px`. It clears this metadata at the start of each call,
+and `reprojection_rms_px`, plus per-marker yaw and RMS in independent mode.
+It clears this metadata at the start of each call,
 so a failed localization cannot leave a previous successful result visible.
 `last_detection` also retains detected IDs, corners and the number of rejected
 candidates, even when pose estimation fails. `draw_localization(image_rgb)`
@@ -126,14 +134,15 @@ assigned to a cell or `None`.
 - All installed markers use the buffer's configured ArUco dictionary. The
   default matches the generated `DICT_4X4_50` Gridfinity tiles under
   `openscad/gridfinity/aruko_square/`.
-- The marker's printed top edge points along buffer +X. Rotating an ArUco tile
-  in its cell violates the current layout model.
+- In aligned mode the printed top edge must point along buffer +X. Independent
+  mode estimates each print's rotation instead.
 - `marker_size_mm` measures the outer black square including its border; it
   excludes the white quiet zone. Measure the final print if exact scale matters.
 - Camera intrinsics and distortion must match the captured image. An unknown
   focal length or marker size prevents reliable metric translation from one
   RGB image.
-- A single visible marker can produce a pose, but a wider marker spread gives
+- A single visible marker can produce a pose in aligned mode; independent mode
+  needs at least two. A wider marker spread gives
   a better constrained buffer pose. Reprojection RMS measures image fit, not
   absolute accuracy; it does not resolve inconsistent physical marker placements.
 

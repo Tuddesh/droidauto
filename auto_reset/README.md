@@ -25,7 +25,7 @@ an outstanding RPC may take up to its timeout to return. It is not an emergency
 stop.
 
 This is the first composed robot task for the reset stack: localize the buffer
-from **one stationary wrist-camera image**, save the pose, then repeatedly hover
+from **one stationary wrist-camera stereo pair**, save the pose, then repeatedly hover
 the robot TCP 20 cm above each configured marker for five seconds. No camera
 images are acquired during execution. Buffer position is trusted until an
 explicit new calibration; moving the buffer invalidates it.
@@ -50,6 +50,43 @@ implement object restoration or VLA evaluation.
 
 ## Frames and calibration
 
+### Independent marker rotations and stereo
+
+The station uses `buffer.marker_orientation: "independent"`. `Buffer.localize()`
+jointly fits the buffer pose and an arbitrary in-plane yaw for each visible
+marker. The printed codes need no common orientation. IDs, cell centers,
+marker sizes and pitch must still match the physical layout; markers must be
+centered, flat and coplanar. At least two known markers must be visible in an
+accepted eye. Square-marker IPPE supplies candidate plane normals; the known
+grid-center relationships establish buffer axes. All corners participate in
+the final pixel-space fit, with per-marker yaw and RMS recorded.
+
+`camera.view: "stereo"` captures LEFT and RIGHT after **one ZED grab**, with a
+shared timestamp. Each eye uses its own rectified intrinsics and its own
+`<serial>_left` / `<serial>_right` hand-eye entry. One blocked eye may fail while
+the other supplies the accepted pose. This does not reconstruct markers hidden
+in both eyes or combine two eyes that each see only one known marker.
+
+When both eyes pass, their poses are converted into robot-base coordinates,
+checked against `stereo_max_position_error_m` and
+`stereo_max_rotation_error_rad`, and averaged with marker-count/pixel-fit
+weights. The weights are a heuristic, not calibrated uncertainty. The combined
+pose must also meet the pixel-RMS threshold in **each** accepted eye.
+Inconsistent hand-eye entries or ambiguous monocular solutions can reject a
+pair even when individual pixel fits look good. Per-eye fits, estimated marker
+rotations, rejection reasons and stereo disagreement are saved.
+
+The launcher displays both results. Select **Left** or **Right** to enlarge an
+eye, or **Both** for the pair. **Raw image** toggles unmodified input. Attempts
+save `input_left.png`, `input_right.png`, individual annotations and combined
+`input.png` / `annotated.png` previews. The active calibration PNG is the chosen
+reference eye; the JSON retains both eye poses and the diagnostic pair's path.
+Existing calibrations from the aligned-marker model need one new calibration.
+
+SciPy is tracked in `environment.yml` for the joint pose/marker-yaw fit. The
+legacy `Buffer` API still offers `marker_orientation="aligned"` for callers
+with known common print orientation; the reset station defaults to independent.
+
 `T_parent_child` maps points from the child frame into the parent frame:
 
 ```text
@@ -58,7 +95,7 @@ T_base_buffer = T_base_tool @ T_tool_camera @ T_camera_buffer
                measured pose  existing hand-eye  Buffer.localize(image)
 ```
 
-The one image establishes the **buffer pose**. It does not calibrate camera
+The one capture establishes the **buffer pose**. It does not calibrate camera
 intrinsics or wrist hand-eye geometry. We reuse native ZED intrinsics and the
 existing DROID `calibration_info.json` entry for the selected serial/view.
 That entry must describe the same tool and camera mounting as the current
@@ -68,7 +105,7 @@ The image is bracketed by fresh stationary robot feedback. Capture rejects
 stale images, movement, missing hand-eye calibration, insufficient visible
 markers and excessive reprojection error. Detection and PnP remain inside
 `Buffer.localize()`. One image can contain multiple markers; the example
-requires two. Known cells allow targets for every configured marker even if
+requires two per accepted eye. Known cells allow targets for every configured marker even if
 some are not visible. A low reprojection error cannot establish physical
 calibration accuracy or eliminate all single-view planar pose ambiguity.
 
@@ -124,7 +161,7 @@ python -m auto_reset calibrate --config configs/marker_hover.local.json --initia
 
 Omit `--initialize` to attach to the running controller. Calibration itself
 sends no motion commands. It opens just the configured wrist camera, captures
-exactly one image and closes it. Every captured attempt, including failed ones,
+one stereo pair (or one image in left/right mode) and closes it. Every captured attempt, including failed ones,
 saves `input.png`, `annotated.png` and `report.json` in a timestamped folder under
 `runs/marker_hover/calibration_attempts/`. The unmodified input is saved before
 localization; annotation uses the detections from that same `Buffer.localize()`

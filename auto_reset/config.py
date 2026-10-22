@@ -25,6 +25,9 @@ class StationConfig:
         self.data = json.loads(self.path.read_text())
         self.layout = self.data["buffer"]
         self.camera = self.data["camera"]
+        self.layout.setdefault("marker_orientation", "independent")
+        self.camera.setdefault("stereo_max_position_error_m", 0.02)
+        self.camera.setdefault("stereo_max_rotation_error_rad", 0.1)
         self.task = self.data["task"]
         self.motion = self.data["motion"]
         for name in ("hover_height_m", "transit_height_m", "dwell_s"):
@@ -41,8 +44,10 @@ class StationConfig:
             raise ValueError("Tracking rotation bound must be at least the arrival tolerance")
         for name in ("max_reprojection_rms_px", "max_capture_age_s"):
             positive(self.camera[name], name)
-        if self.camera["view"] not in ("left", "right"):
-            raise ValueError("camera.view must be left or right")
+        if self.camera["view"] not in ("left", "right", "stereo"):
+            raise ValueError("camera.view must be left, right or stereo")
+        for name in ("stereo_max_position_error_m", "stereo_max_rotation_error_rad"):
+            positive(self.camera[name], name)
         count = self.camera["min_visible_markers"]
         if isinstance(count, bool) or not isinstance(count, int) or count < 1:
             raise ValueError("min_visible_markers must be a positive integer")
@@ -72,6 +77,7 @@ class StationConfig:
             camera_matrix=camera_matrix, distortion_coefficients=distortion,
             cell_size_mm=layout["cell_size_mm"], origin=tuple(layout["origin"]),
             dictionary=layout["dictionary"],
+            marker_orientation=layout["marker_orientation"],
         )
         for marker in layout["markers"]:
             grid.place(ArucoTile(marker["id"], marker["size_mm"], layout["dictionary"]),

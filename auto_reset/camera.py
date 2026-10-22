@@ -21,8 +21,8 @@ class ZedWristCamera:
     """The lab PC needs the installed ZED SDK's Python bindings in its own env."""
 
     def __init__(self, serial: str, view: str = "left"):
-        if view not in ("left", "right"):
-            raise ValueError("view must be left or right")
+        if view not in ("left", "right", "stereo"):
+            raise ValueError("view must be left, right or stereo")
         self.serial, self.view = str(serial), view
         self._camera = None
 
@@ -48,26 +48,38 @@ class ZedWristCamera:
 
     def capture(self) -> CameraFrame:
         """Grab exactly one image. No averaging or multi-image buffer calibration."""
+        self._grab()
+        return self._read_view("left" if self.view == "stereo" else self.view)
+
+    def capture_pair(self) -> list[CameraFrame]:
+        """Return both rectified eyes from the same hardware grab and timestamp."""
+        self._grab()
+        return [self._read_view("left"), self._read_view("right")]
+
+    def _grab(self):
         if self._camera is None:
             raise RuntimeError("Open the camera with a context manager first")
         sl, camera = self._sl, self._camera
         status = camera.grab(sl.RuntimeParameters())
         if status != sl.ERROR_CODE.SUCCESS:
             raise RuntimeError(f"ZED capture failed: {status}")
+
+    def _read_view(self, view) -> CameraFrame:
+        sl, camera = self._sl, self._camera
         image = sl.Mat()
-        status = camera.retrieve_image(image, sl.VIEW.LEFT if self.view == "left" else sl.VIEW.RIGHT)
+        status = camera.retrieve_image(image, sl.VIEW.LEFT if view == "left" else sl.VIEW.RIGHT)
         if status != sl.ERROR_CODE.SUCCESS:
             raise RuntimeError(f"ZED image retrieval failed: {status}")
         rgb = cv2.cvtColor(image.get_data(), cv2.COLOR_BGRA2RGB)
         parameters = camera.get_camera_information().camera_configuration.calibration_parameters
-        intrinsics = parameters.left_cam if self.view == "left" else parameters.right_cam
+        intrinsics = parameters.left_cam if view == "left" else parameters.right_cam
         matrix = np.array([[intrinsics.fx, 0, intrinsics.cx],
                            [0, intrinsics.fy, intrinsics.cy], [0, 0, 1]], dtype=float)
         stamp = camera.get_timestamp(sl.TIME_REFERENCE.IMAGE).get_milliseconds() / 1000
         if not np.isfinite(stamp) or stamp > time.time() + 0.5:
             raise RuntimeError("Invalid camera timestamp; check lab PC clock")
         # LEFT/RIGHT are rectified views; raw distortion must not be applied again.
-        return CameraFrame(rgb.copy(), matrix, np.zeros(5), stamp, self.serial, self.view)
+        return CameraFrame(rgb.copy(), matrix, np.zeros(5), stamp, self.serial, view)
 
     def __exit__(self, *_):
         if self._camera is not None:

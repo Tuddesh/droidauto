@@ -33,10 +33,12 @@ class Window:
         self.busy, self.ready, self.closing = False, False, False
         self.calibration = None
         self.raw_image = self.annotated_image = None
+        self.is_stereo = False
         root.title("DroidAuto — buffer calibration and marker hover")
         root.geometry("1100x850")
         self.status = tk.StringVar(value="Loading saved calibration...")
         self.raw = tk.BooleanVar(value=False)
+        self.eye = tk.StringVar(value="Both")
         self.one_cycle = tk.BooleanVar(value=False)
         controls = ttk.Frame(root, padding=10)
         controls.pack(fill="x")
@@ -49,6 +51,10 @@ class Window:
         self.single_toggle = ttk.Checkbutton(controls, text="One cycle", variable=self.one_cycle)
         self.single_toggle.pack(side="left", padx=10)
         ttk.Checkbutton(controls, text="Raw image", variable=self.raw, command=self.draw_image).pack(side="left")
+        selector = ttk.Combobox(controls, textvariable=self.eye, values=("Both", "Left", "Right"),
+                                state="readonly", width=6)
+        selector.pack(side="left", padx=4)
+        selector.bind("<<ComboboxSelected>>", lambda _: self.draw_image())
         ttk.Label(root, textvariable=self.status, wraplength=1050, padding=10).pack(fill="x")
         self.preview = ttk.Label(root, text="Calibrate to capture and display the wrist-camera image.", anchor="center")
         self.preview.pack(fill="both", expand=True)
@@ -91,6 +97,9 @@ class Window:
         image = self.raw_image if self.raw.get() else self.annotated_image
         if image is None:
             return
+        if self.is_stereo and self.eye.get() != "Both":
+            middle = image.shape[1] // 2
+            image = image[:, :middle] if self.eye.get() == "Left" else image[:, middle:]
         picture = Image.fromarray(image)
         picture.thumbnail((1060, 650))
         self.photo = ImageTk.PhotoImage(picture)
@@ -101,7 +110,7 @@ class Window:
             while True:
                 event, payload = self.events.get_nowait()
                 if event == "image":
-                    self.raw_image, self.annotated_image = payload
+                    self.raw_image, self.annotated_image, self.is_stereo = payload
                     self.draw_image()
                 elif event == "status":
                     self.status.set(payload)
@@ -130,9 +139,14 @@ class Window:
                         self.calibration = BufferCalibration.load(path)
                         HoverPlanner(config, self.calibration)
                         image_path = path.parent / self.calibration.record["source_image"]
-                        if image_path.exists():
+                        report_path = Path(self.calibration.record.get("diagnostics_directory", path.parent / "missing"))
+                        if (report_path / "input.png").exists() and (report_path / "annotated.png").exists():
+                            raw = np.array(Image.open(report_path / "input.png").convert("RGB"))
+                            annotated = np.array(Image.open(report_path / "annotated.png").convert("RGB"))
+                            self.events.put(("image", (raw, annotated, len(self.calibration.record.get("eyes", {})) == 2)))
+                        elif image_path.exists():
                             image = np.array(Image.open(image_path).convert("RGB"))
-                            self.events.put(("image", (image, image)))
+                            self.events.put(("image", (image, image, False)))
                         self.events.put(("status", "Saved calibration loaded. Start loop, or click Recalibrate."))
                     else:
                         self.events.put(("status", "Click Calibrate to capture the buffer."))
@@ -173,10 +187,10 @@ class Window:
         else:
             report.finish()
             quality = calibration.record["quality"]
-            self.events.put(("status", f"Calibrated: IDs {quality['visible_marker_ids']}, RMS {quality['reprojection_rms_px']:.3f} px. Click Start loop."))
+            self.events.put(("status", f"Calibrated via {quality['accepted_views']}: IDs {quality['visible_marker_ids']}, max RMS {quality['reprojection_rms_px']:.3f} px. Click Start loop."))
         finally:
             if report.frame is not None:
-                self.events.put(("image", (report.frame.image_rgb, report.annotated_rgb)))
+                self.events.put(("image", (report.raw_image_rgb, report.annotated_rgb, len(report.frames) == 2)))
 
     def run_task(self, config, robot, single):
         if self.calibration is None:

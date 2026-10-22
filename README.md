@@ -91,7 +91,8 @@ interface and integration notes.
 ## Buffer calibration and marker-hover task
 
 The reusable [`auto_reset` components](auto_reset/README.md) capture one
-stationary wrist-camera image on the lab PC, call `Buffer.localize()`, save the
+stationary wrist-camera stereo pair on the lab PC, call `Buffer.localize()` for
+each eye with independently rotated markers, save the
 buffer pose in robot coordinates and reuse it for repeated marker visits.
 The task hovers the TCP 20 cm above each marker for five seconds. Configuration,
 offline target preview and lab-PC launch commands are documented in that

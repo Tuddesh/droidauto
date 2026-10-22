@@ -38,7 +38,7 @@ def main():
             with DroidRobot(config.data["robot_endpoint"]) as robot:
                 if args.initialize:
                     robot.initialize()
-                print(f"Opening camera {config.camera['serial']}, {config.camera['view']} lens...", flush=True)
+                print(f"Opening camera {config.camera['serial']}, view mode {config.camera['view']}...", flush=True)
                 with ZedWristCamera(str(config.camera["serial"]), config.camera["view"]) as camera:
                     calibration = capture_calibration(config, robot, camera, report=report)
                     # Validate the table-normal convention before accepting this pose.

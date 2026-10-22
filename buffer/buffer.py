@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from itertools import combinations, product
+
 import cv2
 import numpy as np
 
@@ -17,7 +19,7 @@ class Buffer:
     """A rectangular Gridfinity buffer with known ArUco tile placements.
 
     Cell ``(column, row)`` is indexed from the physical lower-left corner as
-    viewed from above with the marker tops facing the viewer. +X goes right,
+    viewed from above using the declared grid axes. +X goes right,
     +Y goes toward the far/top edge, and +Z points out of the marker faces.
     ``origin`` selects which cell's lower-left corner is coordinate (0, 0, 0).
     The marker top plane is Z=0. All physical sizes are specified in mm; pose
@@ -33,6 +35,7 @@ class Buffer:
         cell_size_mm: float = 42.0,
         origin: tuple[int, int] = (0, 0),
         dictionary: str = "DICT_4X4_50",
+        marker_orientation: str = "aligned",
     ) -> None:
         if isinstance(columns, bool) or not isinstance(columns, int) or columns < 1:
             raise ValueError("columns must be a positive integer")
@@ -69,6 +72,9 @@ class Buffer:
         self.cell_size_mm = float(cell_size_mm)
         self.origin = origin
         self.dictionary_name = dictionary
+        if marker_orientation not in ("aligned", "independent"):
+            raise ValueError("marker_orientation must be aligned or independent")
+        self.marker_orientation = marker_orientation
         self.camera_matrix = camera_matrix.copy()
         self.distortion_coefficients = distortion_coefficients.copy()
         self._dictionary = cv2.aruco.getPredefinedDictionary(
@@ -147,8 +153,8 @@ class Buffer:
 
         For a buffer-frame point ``p_buffer`` in metres,
         ``p_camera = T_camera_buffer @ [*p_buffer, 1]``. Requires at least one
-        visible marker registered by ``place``. Marker print orientation must
-        match the buffer axes: its top edge points along +X.
+        visible marker in aligned mode, or two in independent mode. Independent
+        mode estimates each printed marker's yaw while fitting the buffer pose.
         """
         self.last_localization = None
         self.last_detection = None
@@ -166,9 +172,9 @@ class Buffer:
             raise LocalizationError("no ArUco tiles have been placed in the buffer")
 
         gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
-        detector = cv2.aruco.ArucoDetector(
-            self._dictionary, cv2.aruco.DetectorParameters()
-        )
+        parameters = cv2.aruco.DetectorParameters()
+        parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+        detector = cv2.aruco.ArucoDetector(self._dictionary, parameters)
         detected_corners, detected_ids, _rejected = detector.detectMarkers(gray)
         self.last_detection = {
             "ids": [] if detected_ids is None else np.asarray(detected_ids).reshape(-1).tolist(),
@@ -177,6 +183,9 @@ class Buffer:
         }
         if detected_ids is None:
             raise LocalizationError("no known ArUco markers were detected")
+
+        if self.marker_orientation == "independent":
+            return self._localize_independent(markers, detected_corners, detected_ids)
 
         object_points = []
         image_points = []
@@ -235,6 +244,150 @@ class Buffer:
             "reprojection_rms_px": rms,
         }
         return transform
+
+    def _localize_independent(self, markers, detected_corners, detected_ids):
+        """Fit a common board pose and one arbitrary in-plane yaw per marker.
+
+        Square-marker IPPE supplies possible normals and metric centers for
+        initialization. Known center-to-center grid directions establish board
+        yaw. All detected corners then enter a joint pixel-space least-squares
+        fit; marker print yaw is a nuisance parameter, not a buffer axis.
+        """
+        from scipy.optimize import least_squares
+
+        ids, centers, squares, observations, hypotheses = [], [], [], [], []
+        for corners, marker_id in zip(detected_corners, np.asarray(detected_ids).reshape(-1)):
+            marker_id = int(marker_id)
+            if marker_id not in markers:
+                continue
+            if marker_id in ids:
+                raise LocalizationError(f"marker {marker_id} appears more than once in the image")
+            column, row, tile = markers[marker_id]
+            half = tile.marker_size_mm / 2000
+            square = np.array([[-half, half, 0], [half, half, 0],
+                               [half, -half, 0], [-half, -half, 0]], dtype=float)
+            observed = np.asarray(corners, dtype=float).reshape(4, 2)
+            count, rotations, translations, *_ = cv2.solvePnPGeneric(
+                square, observed, self.camera_matrix, self.distortion_coefficients,
+                flags=cv2.SOLVEPNP_IPPE_SQUARE,
+            )
+            candidates = [(cv2.Rodrigues(r)[0], t.reshape(3))
+                          for r, t in zip(rotations, translations)
+                          if np.isfinite(r).all() and np.isfinite(t).all() and t.reshape(3)[2] > 0]
+            if not count or not candidates:
+                raise LocalizationError(f"cannot estimate a square pose for marker {marker_id}")
+            ids.append(marker_id)
+            centers.append(self.cell_center_m(column, row))
+            squares.append(square)
+            observations.append(observed)
+            hypotheses.append(candidates)
+        if len(ids) < 2:
+            raise LocalizationError("independent marker rotations require at least two known visible markers")
+        centers, squares = np.asarray(centers), np.asarray(squares)
+        observations = np.asarray(observations).reshape(-1, 2)
+
+        def object_points(parameters):
+            angles = parameters[6:]
+            cosine, sine = np.cos(angles), np.sin(angles)
+            points = squares.copy()
+            points[:, :, 0] = cosine[:, None] * squares[:, :, 0] - sine[:, None] * squares[:, :, 1]
+            points[:, :, 1] = sine[:, None] * squares[:, :, 0] + cosine[:, None] * squares[:, :, 1]
+            return (points + centers[:, None, :]).reshape(-1, 3)
+
+        def residual(parameters):
+            projected, _ = cv2.projectPoints(object_points(parameters), parameters[:3], parameters[3:6],
+                                             self.camera_matrix, self.distortion_coefficients)
+            return (projected.reshape(-1, 2) - observations).reshape(-1)
+
+        starts = []
+        for first, second in combinations(range(len(ids)), 2):
+            direction_board = centers[second] - centers[first]
+            direction_board /= np.linalg.norm(direction_board)
+            perpendicular_board = np.cross([0, 0, 1], direction_board)
+            for (r1, t1), (r2, t2) in product(hypotheses[first], hypotheses[second]):
+                normal = r1[:, 2] + r2[:, 2]
+                if np.linalg.norm(normal) < 1e-8:
+                    continue
+                normal /= np.linalg.norm(normal)
+                direction_camera = t2 - t1
+                direction_camera -= normal * np.dot(normal, direction_camera)
+                if np.linalg.norm(direction_camera) < 1e-8:
+                    continue
+                direction_camera /= np.linalg.norm(direction_camera)
+                perpendicular_camera = np.cross(normal, direction_camera)
+                rotation = (np.outer(direction_camera, direction_board)
+                            + np.outer(perpendicular_camera, perpendicular_board)
+                            + np.outer(normal, [0, 0, 1]))
+                translation = ((t1 - rotation @ centers[first]) + (t2 - rotation @ centers[second])) / 2
+                angles = []
+                for candidates in hypotheses:
+                    r, _ = max(candidates, key=lambda candidate: np.dot(normal, candidate[0][:, 2]))
+                    relative = rotation.T @ r
+                    angles.append(np.arctan2(relative[1, 0] - relative[0, 1], relative[0, 0] + relative[1, 1]))
+                initial = np.r_[cv2.Rodrigues(rotation)[0].reshape(3), translation, angles]
+                cost = float(np.sum(residual(initial) ** 2))
+                if np.isfinite(cost):
+                    starts.append((cost, initial))
+        solutions = []
+        for _, initial in sorted(starts, key=lambda item: item[0])[:8]:
+            fitted = least_squares(residual, initial, method="trf", x_scale="jac", max_nfev=120,
+                                   ftol=1e-9, xtol=1e-9, gtol=1e-9)
+            parameters = fitted.x
+            if not np.isfinite(parameters).all():
+                continue
+            rotation = cv2.Rodrigues(parameters[:3])[0]
+            points = object_points(parameters) @ rotation.T + parameters[3:6]
+            # Front-facing, positive-depth solutions only.
+            if np.any(points[:, 2] <= 0) or np.dot(rotation[:, 2], points.mean(axis=0)) >= 0:
+                continue
+            error = residual(parameters).reshape(-1, 2)
+            rms = float(np.sqrt(np.mean(np.sum(error ** 2, axis=1))))
+            if np.isfinite(rms):
+                solutions.append((rms, parameters))
+        if not solutions:
+            raise LocalizationError("no valid buffer pose fits the independently rotated markers")
+        rms, parameters = min(solutions, key=lambda solution: solution[0])
+        result = np.eye(4)
+        result[:3, :3] = cv2.Rodrigues(parameters[:3])[0]
+        result[:3, 3] = parameters[3:6]
+        self.last_localization = {
+            "visible_marker_ids": sorted(ids), "reprojection_rms_px": rms,
+            "marker_yaw_degrees": {str(i): float(np.degrees(np.arctan2(np.sin(a), np.cos(a))))
+                                   for i, a in zip(ids, parameters[6:])},
+            "orientation_mode": "independent",
+            "per_marker_rms_px": {
+                str(i): float(np.sqrt(np.mean(np.sum(error ** 2, axis=1))))
+                for i, error in zip(ids, residual(parameters).reshape(-1, 4, 2))
+            },
+        }
+        return result
+
+    def reprojection_rms(self, camera_buffer: np.ndarray) -> float:
+        """Evaluate a pose against the last detected corners and estimated yaws."""
+        if self.last_localization is None or self.last_detection is None:
+            raise LocalizationError("localize an image successfully before evaluating another pose")
+        matrix = np.asarray(camera_buffer, dtype=float)
+        if matrix.shape != (4, 4) or not np.isfinite(matrix).all():
+            raise ValueError("camera_buffer must be a finite 4x4 transform")
+        cells = self.marker_cells()
+        points, observed = [], []
+        angles = self.last_localization.get("marker_yaw_degrees", {})
+        for marker_id, corners in zip(self.last_detection["ids"], self.last_detection["corners"]):
+            if marker_id not in cells:
+                continue
+            column, row = cells[marker_id]
+            tile = self.item_at(column, row)
+            half = tile.marker_size_mm / 2000
+            square = np.array([[-half, half, 0], [half, half, 0],
+                               [half, -half, 0], [-half, -half, 0]])
+            angle = np.radians(angles.get(str(marker_id), 0))
+            cosine, sine = np.cos(angle), np.sin(angle)
+            rotation = np.array([[cosine, -sine, 0], [sine, cosine, 0], [0, 0, 1]])
+            points.extend(square @ rotation.T + self.cell_center_m(column, row))
+            observed.extend(np.asarray(corners).reshape(4, 2))
+        projected, _ = cv2.projectPoints(np.asarray(points), cv2.Rodrigues(matrix[:3, :3])[0],
+                                         matrix[:3, 3], self.camera_matrix, self.distortion_coefficients)
+        return float(np.sqrt(np.mean(np.sum((projected.reshape(-1, 2) - observed) ** 2, axis=1))))
 
     def draw_localization(self, image_rgb: np.ndarray) -> np.ndarray:
         """Annotate the image from the last localize() call without redetecting.
