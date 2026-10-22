@@ -97,6 +97,9 @@ requires a separate camera-to-robot calibration.
 `localize()` also sets `last_localization` to the matched `visible_marker_ids`
 and `reprojection_rms_px`. It clears this metadata at the start of each call,
 so a failed localization cannot leave a previous successful result visible.
+`last_detection` also retains detected IDs, corners and the number of rejected
+candidates, even when pose estimation fails. `draw_localization(image_rgb)`
+draws those stored detections on the same input image without detecting again.
 `marker_cells()` returns the marker-ID-to-cell mapping and rejects ambiguous
 duplicate IDs or mismatched dictionaries. Placement still permits distinct
 physical items with the same ID, but such a layout cannot be localized.

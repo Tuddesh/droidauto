@@ -90,7 +90,7 @@ def load_hand_eye(path, serial: str, view: str) -> np.ndarray:
     return pose_to_transform(data[key]["pose"])
 
 
-def capture_calibration(config, robot, camera) -> BufferCalibration:
+def capture_calibration(config, robot, camera, report=None) -> BufferCalibration:
     """Capture once while stationary, then call the configured buffer's localize().
 
     Open the camera before calling this function so camera startup does not
@@ -99,7 +99,10 @@ def capture_calibration(config, robot, camera) -> BufferCalibration:
     tool_camera = load_hand_eye(config.resolve(config.camera["hand_eye_file"]),
                                str(config.camera["serial"]), config.camera["view"])
     before = robot.require_stationary()
+    print("Capturing one wrist-camera image...", flush=True)
     frame = camera.capture()
+    if report is not None:
+        report.captured(frame)
     after = robot.require_stationary()
     translation, rotation = pose_error(before.tool_pose, after.tool_pose)
     if (translation > 0.002 or rotation > 0.01
@@ -115,11 +118,21 @@ def capture_calibration(config, robot, camera) -> BufferCalibration:
         raise ValueError("Captured image does not match the configured camera/view")
 
     grid = config.make_buffer(frame.camera_matrix, frame.distortion)
-    camera_buffer = grid.localize(frame.image_rgb)
+    print("Localizing buffer in captured image...", flush=True)
+    try:
+        camera_buffer = grid.localize(frame.image_rgb)
+    finally:
+        if report is not None:
+            report.localized(grid)
     quality = grid.last_localization
-    if (len(quality["visible_marker_ids"]) < config.camera["min_visible_markers"]
-            or quality["reprojection_rms_px"] > config.camera["max_reprojection_rms_px"]):
-        raise RuntimeError(f"Single-image localization did not meet configured requirements: {quality}")
+    reasons = []
+    visible_count = len(quality["visible_marker_ids"])
+    if visible_count < config.camera["min_visible_markers"]:
+        reasons.append(f"matched {visible_count} markers; need at least {config.camera['min_visible_markers']}")
+    if quality["reprojection_rms_px"] > config.camera["max_reprojection_rms_px"]:
+        reasons.append(f"reprojection RMS {quality['reprojection_rms_px']:.3f} px exceeds {config.camera['max_reprojection_rms_px']:.3f} px")
+    if reasons:
+        raise RuntimeError("Single-image localization rejected: " + "; ".join(reasons))
     # Stationarity was checked around the image; use the measured pre-image pose.
     base_buffer = before.tool_pose @ tool_camera @ camera_buffer
     result = BufferCalibration({

@@ -14,7 +14,9 @@ def relaunch(robot, attempts: int = 5) -> None:
         raise ValueError("At least one relaunch attempt is required")
     for attempt in range(1, attempts + 1):
         try:
+            print(f"Startup {attempt}/{attempts}: launch_controller()...", flush=True)
             robot.launch_controller()
+            print(f"Startup {attempt}/{attempts}: launch_robot()...", flush=True)
             robot.launch_robot()
             return
         except zerorpc.exceptions.RemoteError as exc:

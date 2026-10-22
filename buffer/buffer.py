@@ -77,6 +77,7 @@ class Buffer:
         self._cells: dict[tuple[int, int], BufferItem] = {}
         self._placed_item_ids: set[int] = set()
         self.last_localization: dict | None = None
+        self.last_detection: dict | None = None
 
     def marker_cells(self) -> dict[int, tuple[int, int]]:
         """Return marker ID to cell assignments, rejecting ambiguous layouts."""
@@ -150,6 +151,7 @@ class Buffer:
         match the buffer axes: its top edge points along +X.
         """
         self.last_localization = None
+        self.last_detection = None
         self.marker_cells()  # A duplicate physical ID cannot define a unique pose.
         image_rgb = np.asarray(image_rgb)
         if image_rgb.ndim != 3 or image_rgb.shape[2] != 3 or image_rgb.dtype != np.uint8:
@@ -168,6 +170,11 @@ class Buffer:
             self._dictionary, cv2.aruco.DetectorParameters()
         )
         detected_corners, detected_ids, _rejected = detector.detectMarkers(gray)
+        self.last_detection = {
+            "ids": [] if detected_ids is None else np.asarray(detected_ids).reshape(-1).tolist(),
+            "corners": [np.asarray(corner).copy() for corner in detected_corners],
+            "rejected_candidates": len(_rejected),
+        }
         if detected_ids is None:
             raise LocalizationError("no known ArUco markers were detected")
 
@@ -228,3 +235,25 @@ class Buffer:
             "reprojection_rms_px": rms,
         }
         return transform
+
+    def draw_localization(self, image_rgb: np.ndarray) -> np.ndarray:
+        """Annotate the image from the last localize() call without redetecting.
+
+        Green outlines match this layout; red outlines are detected IDs absent
+        from it. This remains available when detection succeeds but PnP or the
+        caller's quality requirements reject the pose.
+        """
+        image = np.asarray(image_rgb).copy()
+        if self.last_detection is None:
+            return image
+        known = self.marker_cells()
+        for marker_id, corners in zip(self.last_detection["ids"], self.last_detection["corners"]):
+            points = np.rint(corners).astype(np.int32).reshape(4, 2)
+            color = (0, 220, 0) if marker_id in known else (255, 60, 60)
+            cv2.polylines(image, [points], True, color, 2)
+            label = f"ID {marker_id}"
+            label += f" cell {known[marker_id]}" if marker_id in known else " NOT IN LAYOUT"
+            x, y = points[0]
+            cv2.putText(image, label, (max(0, x), max(18, y - 8)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+        return image

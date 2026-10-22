@@ -5,6 +5,7 @@ import json
 import sys
 
 from .calibration import BufferCalibration, capture_calibration
+from .calibration_report import CalibrationReport
 from .camera import ZedWristCamera
 from .config import StationConfig
 from .motion import HoverPlanner
@@ -24,20 +25,35 @@ def main():
                                  help="Explicitly restart DROID arm and gripper controllers")
         if name == "run":
             command.add_argument("--cycles", type=int, help="Omit to loop until Ctrl+C")
+        if name == "calibrate":
+            command.add_argument("--no-display", action="store_true",
+                                 help="Save diagnostic images without opening a desktop window")
     args = parser.parse_args()
     config = StationConfig(args.config)
     calibration_path = config.resolve(config.data["calibration_file"])
     if args.command == "calibrate":
         if calibration_path.exists() or calibration_path.with_suffix(".png").exists():
             raise FileExistsError(f"Archive the existing calibration before recalibrating: {calibration_path}")
-        with DroidRobot(config.data["robot_endpoint"]) as robot:
-            if args.initialize:
-                robot.initialize()
-            with ZedWristCamera(str(config.camera["serial"]), config.camera["view"]) as camera:
-                calibration = capture_calibration(config, robot, camera)
-                # Validate the table-normal convention before accepting this pose.
-                HoverPlanner(config, calibration)
-                calibration.save(calibration_path)
+        report = CalibrationReport(config.resolve(config.data["log_directory"]), not args.no_display)
+        try:
+            print(f"Connecting to DROID at {config.data['robot_endpoint']}...", flush=True)
+            with DroidRobot(config.data["robot_endpoint"]) as robot:
+                if args.initialize:
+                    robot.initialize()
+                print(f"Opening camera {config.camera['serial']}, {config.camera['view']} lens...", flush=True)
+                with ZedWristCamera(str(config.camera["serial"]), config.camera["view"]) as camera:
+                    calibration = capture_calibration(config, robot, camera, report=report)
+                    # Validate the table-normal convention before accepting this pose.
+                    HoverPlanner(config, calibration)
+                    calibration.save(calibration_path)
+        except BaseException as exc:
+            report.finish(exc)
+            raise
+        else:
+            report.finish()
+        finally:
+            # Close hardware connections before waiting for desktop interaction.
+            report.display()
         print(f"Saved calibration: {calibration_path}")
         print(json.dumps(calibration.record["quality"], indent=2))
         return

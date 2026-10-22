@@ -14,6 +14,7 @@ explicit new calibration; moving the buffer invalidates it.
 | `camera.py` | One native-resolution rectified RGB image and matching intrinsics from the selected ZED camera. |
 | `robot.py` | DROID ZeroRPC connection, optional explicit initialization, fresh state, Cartesian commands. |
 | `calibration.py` | Stationary capture, coordinate-frame composition and saved calibration. Calls `Buffer.localize()`; contains no detector or PnP implementation. |
+| `calibration_report.py` | Raw input, marker annotations, failure details and desktop preview for every captured calibration attempt. |
 | `motion.py` | Buffer-relative hover targets, rise/traverse/descend waypoints, streamed execution and measured arrival/dwell checks. |
 | `task.py` | Repeat visits, five-second holds, cancellation and JSONL event records. |
 | `config.py` | Physical layout, hardware selection, task and motion settings. |
@@ -99,9 +100,21 @@ python -m auto_reset calibrate --config configs/marker_hover.local.json --initia
 
 Omit `--initialize` to attach to the running controller. Calibration itself
 sends no motion commands. It opens just the configured wrist camera, captures
-exactly one image and closes it. Inspect the saved PNG and calibration JSON in
-`runs/marker_hover/`. Existing calibration files are never overwritten; archive
-the JSON and matching PNG before deliberately taking a new calibration.
+exactly one image and closes it. Every captured attempt, including failed ones,
+saves `input.png`, `annotated.png` and `report.json` in a timestamped folder under
+`runs/marker_hover/calibration_attempts/`. The unmodified input is saved before
+localization; annotation uses the detections from that same `Buffer.localize()`
+call. Green outlines match configured IDs; red outlines identify detected IDs
+absent from the layout. The report includes matched IDs, reprojection RMS and
+the actual rejection reason and thresholds.
+
+After hardware connections close, a desktop window shows that exact image and
+the result. Press **R** for the raw image, **A** for annotations and **Q** or
+Escape to close. On a headless SSH session, paths are printed instead. Use
+`--no-display` to deliberately suppress the window; diagnostic files are still
+saved. An accepted pose is additionally saved as the main calibration JSON/PNG
+in `runs/marker_hover/`. Existing accepted calibration files are never
+overwritten; archive the JSON and matching PNG before deliberately recalibrating.
 
 Inspect targets offline; this command opens no camera or robot connection:
 
