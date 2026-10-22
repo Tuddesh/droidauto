@@ -62,17 +62,20 @@ grid-center relationships establish buffer axes. All corners participate in
 the final pixel-space fit, with per-marker yaw and RMS recorded.
 
 `camera.view: "stereo"` captures LEFT and RIGHT after **one ZED grab**, with a
-shared timestamp. Each eye uses its own rectified intrinsics and its own
-`<serial>_left` / `<serial>_right` hand-eye entry. One blocked eye may fail while
+shared timestamp. Each eye uses its own rectified intrinsics. The SDK's
+rectified `stereo_transform`, requested in IMAGE coordinates and metres,
+expresses the right optical frame in the left optical frame. It supplies the
+eye-to-eye offset; the DROID hand-eye file is not used to align the eyes.
+One blocked eye may fail while
 the other supplies the accepted pose. This does not reconstruct markers hidden
 in both eyes or combine two eyes that each see only one known marker.
 
-When both eyes pass, their poses are converted into robot-base coordinates,
+When both eyes pass, their poses are converted into the left optical frame,
 checked against `stereo_max_position_error_m` and
 `stereo_max_rotation_error_rad`, and averaged with marker-count/pixel-fit
 weights. The weights are a heuristic, not calibrated uncertainty. The combined
 pose must also meet the pixel-RMS threshold in **each** accepted eye.
-Inconsistent hand-eye entries or ambiguous monocular solutions can reject a
+Inconsistent image fits or ambiguous monocular solutions can reject a
 pair even when individual pixel fits look good. Per-eye fits, estimated marker
 rotations, rejection reasons and stereo disagreement are saved.
 
@@ -95,16 +98,22 @@ T_base_buffer = T_base_tool @ T_tool_camera @ T_camera_buffer
                measured pose  existing hand-eye  Buffer.localize(image)
 ```
 
-The one capture establishes the **buffer pose**. It does not calibrate camera
-intrinsics or wrist hand-eye geometry. We reuse native ZED intrinsics and the
-existing DROID `calibration_info.json` entry for the selected serial/view.
-That entry must describe the same tool and camera mounting as the current
-robot. No camera-to-tool transform is guessed or copied into code.
+The one capture establishes the **buffer pose relative to the camera**. It does
+not calibrate wrist mounting geometry. The robot-base transform additionally
+needs the left rectified optical frame's pose in the DROID tool frame. Supply
+a sourced mounting pose as `camera.tool_left_camera_pose` with six values
+`[x, y, z, roll, pitch, yaw]` in metres/radians (fixed-axis XYZ), or use a measured
+left-eye DROID hand-eye entry. A valid right-eye entry can also be converted to
+the left eye using the SDK stereo transform. A camera-body mount pose must
+first be composed with the optical-frame offset; it is not interchangeable
+with this setting. No numerical mounting pose is supplied by default.
 All-zero identity entries and identical left/right camera-to-tool entries are
 rejected as invalid for this wrist-camera setup. A JSON entry's presence alone
 does not establish that hand-eye calibration has been performed. One buffer
 image estimates buffer-to-camera geometry; it does not determine an unknown
-camera-to-tool transform.
+camera-to-tool transform. Eye fitting/agreement and diagnostic images are
+still produced when this mounting pose is missing; robot-frame calibration
+then reports that specific missing input and leaves Start disabled.
 
 Pressing Calibrate establishes the operator's assertion that the arm is
 stationary. Manual capture reads the tool pose once and applies no timestamp,

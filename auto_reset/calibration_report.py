@@ -52,6 +52,7 @@ class CalibrationReport:
             "image_size_px": [frame.image_rgb.shape[1], frame.image_rgb.shape[0]],
             "input_image": path.name, "image_mean": float(np.mean(frame.image_rgb)),
             "image_min": int(frame.image_rgb.min()), "image_max": int(frame.image_rgb.max()),
+            "left_camera_eye": None if frame.left_camera_eye is None else frame.left_camera_eye.tolist(),
         }
         self.annotated_rgb = self._combine(list(self.overlays.values()))
         print(f"Calibration input ({frame.serial}, {frame.view}): {path}", flush=True)

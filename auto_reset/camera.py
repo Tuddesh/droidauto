@@ -14,6 +14,7 @@ class CameraFrame:
     timestamp_s: float
     serial: str
     view: str
+    left_camera_eye: np.ndarray | None = None
 
 
 class ZedWristCamera:
@@ -38,6 +39,8 @@ class ZedWristCamera:
         params.camera_fps = 30
         params.depth_mode = sl.DEPTH_MODE.NONE
         params.camera_image_flip = sl.FLIP_MODE.OFF
+        params.coordinate_units = sl.UNIT.METER
+        params.coordinate_system = sl.COORDINATE_SYSTEM.IMAGE
         status = camera.open(params)
         if status != sl.ERROR_CODE.SUCCESS:
             camera.close()
@@ -76,7 +79,11 @@ class ZedWristCamera:
                            [0, intrinsics.fy, intrinsics.cy], [0, 0, 1]], dtype=float)
         stamp = camera.get_timestamp(sl.TIME_REFERENCE.IMAGE).get_milliseconds() / 1000
         # LEFT/RIGHT are rectified views; raw distortion must not be applied again.
-        return CameraFrame(rgb.copy(), matrix, np.zeros(5), stamp, self.serial, view)
+        # For rectified LEFT/RIGHT, the SDK gives the right optical origin in
+        # the left optical frame. Do not use unrectified factory R/T here.
+        left_camera_eye = (np.eye(4) if view == "left"
+                           else np.asarray(parameters.stereo_transform.m, dtype=float).copy())
+        return CameraFrame(rgb.copy(), matrix, np.zeros(5), stamp, self.serial, view, left_camera_eye)
 
     def __exit__(self, *_):
         if self._camera is not None:

@@ -28,6 +28,9 @@ class StationConfig:
         self.layout.setdefault("marker_orientation", "independent")
         self.camera.setdefault("stereo_max_position_error_m", 0.02)
         self.camera.setdefault("stereo_max_rotation_error_rad", 0.1)
+        if "tool_left_camera_pose" in self.camera:
+            from .transforms import pose_to_transform
+            pose_to_transform(self.camera["tool_left_camera_pose"])
         self.task = self.data["task"]
         self.motion = self.data["motion"]
         for name in ("hover_height_m", "transit_height_m", "dwell_s"):
