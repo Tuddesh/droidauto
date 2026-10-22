@@ -76,6 +76,22 @@ class Buffer:
         )
         self._cells: dict[tuple[int, int], BufferItem] = {}
         self._placed_item_ids: set[int] = set()
+        self.last_localization: dict | None = None
+
+    def marker_cells(self) -> dict[int, tuple[int, int]]:
+        """Return marker ID to cell assignments, rejecting ambiguous layouts."""
+        markers = {}
+        for cell, item in self._cells.items():
+            if not isinstance(item, ArucoTile):
+                continue
+            if item.marker_id in markers:
+                raise LocalizationError(f"marker {item.marker_id} is placed more than once")
+            if item.dictionary != self.dictionary_name:
+                raise LocalizationError("tile and buffer ArUco dictionaries differ")
+            if item.marker_id >= self._dictionary.bytesList.shape[0]:
+                raise LocalizationError(f"marker {item.marker_id} is outside the dictionary")
+            markers[item.marker_id] = cell
+        return markers
 
     def place(self, item: BufferItem, column: int, row: int) -> None:
         """Record an item's physical placement, starting at its lower-left cell.
@@ -133,6 +149,8 @@ class Buffer:
         visible marker registered by ``place``. Marker print orientation must
         match the buffer axes: its top edge points along +X.
         """
+        self.last_localization = None
+        self.marker_cells()  # A duplicate physical ID cannot define a unique pose.
         image_rgb = np.asarray(image_rgb)
         if image_rgb.ndim != 3 or image_rgb.shape[2] != 3 or image_rgb.dtype != np.uint8:
             raise ValueError("image_rgb must be an HxWx3 uint8 RGB image")
@@ -155,10 +173,14 @@ class Buffer:
 
         object_points = []
         image_points = []
+        visible_ids = []
         for corners, marker_id in zip(detected_corners, np.asarray(detected_ids).reshape(-1)):
             placement = markers.get(int(marker_id))
             if placement is None:
                 continue
+            if int(marker_id) in visible_ids:
+                raise LocalizationError(f"marker {marker_id} appears more than once in the image")
+            visible_ids.append(int(marker_id))
             column, row, item = placement
             center = self.cell_center_m(column, row)
             half_size = item.marker_size_mm / 2000
@@ -190,4 +212,19 @@ class Buffer:
         transform = np.eye(4, dtype=np.float64)
         transform[:3, :3] = cv2.Rodrigues(rotation_vector)[0]
         transform[:3, 3] = translation.reshape(3)
+        points_camera = object_points @ transform[:3, :3].T + transform[:3, 3]
+        if np.any(points_camera[:, 2] <= 0):
+            raise LocalizationError("estimated markers are behind the camera")
+        projected, _ = cv2.projectPoints(
+            object_points, rotation_vector, translation,
+            self.camera_matrix, self.distortion_coefficients,
+        )
+        residuals = projected.reshape(-1, 2) - image_points
+        rms = float(np.sqrt(np.mean(np.sum(residuals ** 2, axis=1))))
+        if not np.isfinite(rms):
+            raise LocalizationError("non-finite reprojection error")
+        self.last_localization = {
+            "visible_marker_ids": sorted(visible_ids),
+            "reprojection_rms_px": rms,
+        }
         return transform

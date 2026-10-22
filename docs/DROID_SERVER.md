@@ -295,6 +295,86 @@ action to `env.step()` and record rollout data. The camera wrapper runs on the
 control PC; camera frames do not pass through the NUC ZeroRPC server. Their
 defaults and reset behavior need review before adapting them for DroidAuto.
 
+## Control-stack review (2026-10-22)
+
+The installed checkout under `/home/ros/drozdpat/repos/control_droid` is still
+`numpy2-stack` at `b1d96c2`, with DROID at `740f28b`. Its own environment imports
+`droid` and `ServerInterface` from that checkout's `packages/droid` tree. Local
+changes in that submodule concern camera reading and machine parameters, not
+the robot command implementation. This inspection did not restart controllers
+or send arm or gripper commands.
+
+The most useful local sources, relative to that checkout, are:
+
+| Source | What it establishes |
+|---|---|
+| `README.md`, `MIGRATION_HANDOFF.md` | Current stack installation and the unchanged ZeroRPC boundary to the older NUC server. Some handoff paths refer to a former `control_droid-new_stack` worktree. |
+| `packages/droid/droid/misc/server_interface.py` | Robot-only client, startup sequence, state reads, and command forwarding. |
+| `packages/droid/droid/robot_env.py` | Camera observations, default robot reset, action dimensions, and action-range checks. |
+| `scripts/robot_control/test_server_no_cameras.py` | Existing robot-only example using `ServerInterface`; running it initializes controllers and subsequently moves the robot. |
+| `scripts/robot_control/test_joint_sine.py` | Joint-position streaming, timing, and feedback measurements. Running it also resets and moves the robot. |
+| `packages/droid/droid/franka/robot.py` | NUC-side target handling, controller selection, and action conversion. |
+| `packages/droid/droid/robot_ik/robot_ik_solver.py` | Normalized action scaling and Cartesian IK constraints. |
+
+The older `scripts/robot_control/README.md` recommends a nested TeleopController
+environment. The umbrella README and migration handoff describe the newer
+checkout-local environment. DroidAuto should retain its own environment when
+integrating the client package; it should not depend on activating either of
+Patrik's environments.
+
+### Initialization and commands
+
+`ServerInterface(ip_address=..., launch=True)` connects and calls
+`launch_controller()` then `launch_robot()`. Its retry helper repeats both on a
+remote error, up to five attempts. `launch_controller()` restarts the arm and
+gripper controller processes; `launch_robot()` constructs their Polymetis
+interfaces and the IK solver. `launch=False` skips those operations.
+
+`RobotEnv` constructs that client, opens cameras, and by default calls
+`reset()`, which opens the gripper and sends a home joint target.
+`RobotEnv(do_reset=False)` still initializes controllers and cameras. For an
+arm-only tool, the narrower integration point is `ServerInterface`.
+
+| Operation | Installed client call and input |
+|---|---|
+| Read feedback | `get_robot_state()` returns state and robot timestamp. |
+| One joint target | `update_joints(q, velocity=False, blocking=True)` takes seven joint angles in radians. |
+| One gripper target | `update_gripper(g, velocity=False, blocking=True)` uses normalized position: 0 open, 1 closed. |
+| Joint action stream | `update_command(action, action_space="joint_position", gripper_action_space="position", blocking=False)` takes seven angles plus one gripper position. |
+| Cartesian action stream | `update_command(action, action_space="cartesian_velocity", gripper_action_space="position", blocking=False)` takes six normalized Cartesian action components plus one gripper position. |
+
+The examples schedule streaming at 15 Hz in the client; `update_command` does
+not provide that scheduling. DROID's normalized velocity actions represent
+scaled increments, not raw SI velocity values. Blocking `update_pose` solves
+endpoint IK and then sends a joint move; it does not promise a straight
+end-effector path.
+
+### Robot limits and missing metadata API
+
+Read-only enumeration of the live NUC's public RPC methods found no robot
+metadata, model, or joint-limit query. The control PC's selected model is
+`panda`, and its model XML contains joint limits; this does not establish which
+model/configuration the live NUC is using.
+
+The inspected Cartesian IK path enables joint-position constraints using its
+model. The direct joint-position path does not explicitly clamp target joints
+against those limits before forwarding them to Polymetis. Using the official
+client therefore does not itself establish server-side target validation for
+every action space.
+
+DroidAuto's jogger currently duplicates Panda limits. To replace that with
+server-provided configuration, the NUC needs a metadata RPC backed by its
+actual robot model, with joint names/order, units, position limits, and the
+motion limits available from that model. Server-side target validation should
+use the same source. A client should not silently substitute a copied Panda
+table when metadata is missing.
+
+The live state read during this review failed with
+`AttributeError: 'FrankaRobot' object has no attribute '_robot'`. The RPC
+service is reachable but lacks its arm interface. That establishes an
+initialization problem at the time of inspection, not the cause of any
+separate controller-launch failure.
+
 ## Primary sources
 
 - [Official DROID platform repository](https://github.com/droid-dataset/droid)

@@ -1,6 +1,9 @@
 import math
 import time
 import unittest
+from unittest.mock import Mock
+
+import zerorpc
 
 from scripts.joint_jogger import (
     PANDA_LIMITS,
@@ -26,6 +29,12 @@ class FakeRobot:
     def __init__(self):
         self.current = state()
         self.calls = []
+
+    def launch_controller(self):
+        self.calls.append("launch_controller")
+
+    def launch_robot(self):
+        self.calls.append("launch_robot")
 
     def get_robot_state(self):
         self.calls.append("get_robot_state")
@@ -109,6 +118,20 @@ class JointJoggerTests(unittest.TestCase):
         self.assertEqual(message, "Robot state ready.")
         self.assertIsNone(joint)
         self.assertNotIn("update_joints", robot.calls)
+
+    def test_relaunch_retries_full_startup_before_returning_ready_state(self):
+        robot = FakeRobot()
+        robot.launch_robot = Mock(side_effect=[
+            zerorpc.exceptions.RemoteError("_InactiveRpcError", "Robot context not valid", None),
+            None,
+        ])
+        reported, message, joint = execute_job(robot, "relaunch", ())
+        self.assertEqual(robot.calls.count("launch_controller"), 2)
+        self.assertEqual(robot.launch_robot.call_count, 2)
+        self.assertIs(reported, robot.current)
+        self.assertEqual(message, "Controller relaunched; live robot state ready.")
+        self.assertIsNone(joint)
+        self.assertFalse(any(isinstance(call, tuple) for call in robot.calls))
 
     def test_stale_or_frozen_state_disables_motion(self):
         class FrozenRobot(FakeRobot):

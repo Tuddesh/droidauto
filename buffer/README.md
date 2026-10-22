@@ -94,6 +94,18 @@ whose IDs match placed `ArucoTile` items. It raises `LocalizationError` if it
 cannot see a placed marker. It does not establish the robot-base frame; that
 requires a separate camera-to-robot calibration.
 
+`localize()` also sets `last_localization` to the matched `visible_marker_ids`
+and `reprojection_rms_px`. It clears this metadata at the start of each call,
+so a failed localization cannot leave a previous successful result visible.
+`marker_cells()` returns the marker-ID-to-cell mapping and rejects ambiguous
+duplicate IDs or mismatched dictionaries. Placement still permits distinct
+physical items with the same ID, but such a layout cannot be localized.
+
+The [`auto_reset` components](../auto_reset/README.md) call this method during
+a single stationary wrist-camera capture, compose its result with the measured
+robot pose and existing hand-eye calibration, and persist the resulting buffer
+pose. They do not implement a second localizer.
+
 `place(item, column, row)` updates the buffer's **layout model**. It reserves
 the cells occupied by an item's footprint and rejects overlapping or out of
 bounds placements. Every `BufferItem` has a read-only, process-local `item_id`
@@ -119,8 +131,8 @@ assigned to a cell or `None`.
   focal length or marker size prevents reliable metric translation from one
   RGB image.
 - A single visible marker can produce a pose, but a wider marker spread gives
-  a better constrained buffer pose. This draft does not report a confidence
-  score or resolve inconsistent physical marker placements.
+  a better constrained buffer pose. Reprojection RMS measures image fit, not
+  absolute accuracy; it does not resolve inconsistent physical marker placements.
 
 To run the geometry checks:
 

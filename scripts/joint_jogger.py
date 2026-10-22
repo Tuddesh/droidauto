@@ -11,6 +11,11 @@ import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+if __package__:
+    from .droid_rpc import MAX_STATE_AGE_S, RPC_TIMEOUT_S, relaunch
+else:
+    from droid_rpc import MAX_STATE_AGE_S, RPC_TIMEOUT_S, relaunch
+
 # Panda joint limits in radians, from Franka's FCI control parameters:
 # https://support.franka.de/docs/control_parameters.html
 PANDA_LIMITS = (
@@ -27,7 +32,6 @@ LIMIT_MARGIN_RAD = math.radians(5.0)
 STILL_VELOCITY_RAD_S = 0.05
 TARGET_TOLERANCE_RAD = math.radians(1.0)
 GRIPPER_TOLERANCE = 0.15
-MAX_STATE_AGE_S = 5.0
 STATE_SAMPLE_INTERVAL_S = 0.15
 RELAUNCH_READY_TIMEOUT_S = 30.0
 
@@ -111,18 +115,9 @@ def send_gripper_target(robot, position: float) -> None:
 
 
 def relaunch_controller(robot) -> dict:
-    """Restart the NUC controllers once, then wait for live, still robot feedback."""
-    robot.launch_controller()
+    """Retry DROID startup, then wait for live, still robot feedback."""
+    relaunch(robot)
     deadline = time.monotonic() + RELAUNCH_READY_TIMEOUT_S
-    while True:
-        try:
-            robot.launch_robot()
-            break
-        except Exception as exc:
-            if time.monotonic() >= deadline:
-                raise RuntimeError(f"Robot interface did not reconnect after relaunch: {exc}") from exc
-            time.sleep(1)
-
     while True:
         try:
             return read_fresh_state(robot)
@@ -282,7 +277,7 @@ class JointJoggerGUI:
         try:
             import zerorpc
 
-            robot = zerorpc.Client(heartbeat=20)
+            robot = zerorpc.Client(heartbeat=20, timeout=RPC_TIMEOUT_S)
             robot.connect(f"tcp://{self.nuc_ip}:4242")
             while True:
                 action, *values = self.jobs.get()

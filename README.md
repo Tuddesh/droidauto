@@ -88,6 +88,45 @@ interface and integration notes.
 - Gridfinity fixtures and generated ArUco markers under `openscad/`.
 - Mask R-CNN, synthetic-data, and YCB-V perception experiments.
 
+## Buffer calibration and marker-hover task
+
+The reusable [`auto_reset` components](auto_reset/README.md) capture one
+stationary wrist-camera image on the lab PC, call `Buffer.localize()`, save the
+buffer pose in robot coordinates and reuse it for repeated marker visits.
+The task hovers the TCP 20 cm above each marker for five seconds. Configuration,
+offline target preview and lab-PC launch commands are documented in that
+module's README. The geometric waypoint planner currently assumes a cleared
+workspace; obstacle-aware planning remains future integration work.
+
+## Single joint-offset move
+
+From this PC or the control PC, using DroidAuto's own environment:
+
+```bash
+conda activate "$PWD/.conda"
+python scripts/joint_offset_move.py
+```
+
+This script uses the existing DROID ZeroRPC interface at `192.168.88.12:4242`.
+It initializes the arm and gripper controllers, reads the measured joint
+positions, and previews a target of **+pi/8 radians (+22.5 degrees) on all seven
+joints**. Press Enter to send the move or Ctrl+C to cancel. It reads fresh
+feedback again after confirmation, then sends that relative offset using a
+blocking `update_joints` call and reports the measured result. It does not
+copy a joint-limit table into the client or clamp the requested target. This
+does not establish that a particular target or path is collision-free or
+within the robot's limits; the current DROID API has no metadata query.
+
+The NUC must be reachable and the robot ready for control. No camera software
+or installation of Patrik's full stack is needed on the computer running this
+script. Use `--nuc-ip` to select a different server.
+
+Both the offset script and the jogger use a 60-second RPC timeout and Patrik's
+startup sequence: retry `launch_controller()` followed by `launch_robot()` up
+to five times on a remote error, with 0.1 seconds between attempts. Feedback
+must be no more than 0.5 seconds old. Motion commands are sent once; only
+controller initialization is retried.
+
 ## Manual joint jog
 
 `scripts/joint_jogger.py` is a small GUI for testing the DROID ZeroRPC server
@@ -132,6 +171,8 @@ inspect the robot's workspace and use it with an operator at the station.
 
 ```text
 buffer/                  Grid layout, items, and camera localization
+auto_reset/              Capture, saved calibration, motion and composed tasks
+configs/                 Tracked examples; machine-specific *.local.json ignored
 docs/                    Design and integration notes
 openscad/                Fixtures, fiducials, and fabrication automation
 maskrcnn_experiments/    Dataset inspection and perception experiments
