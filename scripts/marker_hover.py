@@ -187,7 +187,8 @@ class Window:
         else:
             report.finish()
             quality = calibration.record["quality"]
-            self.events.put(("status", f"Calibrated via {quality['accepted_views']}: IDs {quality['visible_marker_ids']}, max RMS {quality['reprojection_rms_px']:.3f} px. Click Start loop."))
+            mount = "; mount: identity" if calibration.record.get("identity_mount_assumption") else ""
+            self.events.put(("status", f"Calibrated via {quality['accepted_views']}: IDs {quality['visible_marker_ids']}, max RMS {quality['reprojection_rms_px']:.3f} px{mount}. Click Start loop."))
         finally:
             if report.frame is not None:
                 self.events.put(("image", (report.raw_image_rgb, report.annotated_rgb, len(report.frames) == 2)))

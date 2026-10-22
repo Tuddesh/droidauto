@@ -56,8 +56,9 @@ The station uses `buffer.marker_orientation: "independent"`. `Buffer.localize()`
 jointly fits the buffer pose and an arbitrary in-plane yaw for each visible
 marker. The printed codes need no common orientation. IDs, cell centers,
 marker sizes and pitch must still match the physical layout; markers must be
-centered, flat and coplanar. At least two known markers must be visible in an
-accepted eye. Square-marker IPPE supplies candidate plane normals; the known
+centered, flat and coplanar. Standalone `Buffer.localize()` needs two markers;
+joint `Buffer.localize_stereo()` needs two distinct known IDs across the pair.
+Square-marker IPPE supplies candidate plane normals; the known
 grid-center relationships establish buffer axes. All corners participate in
 the final pixel-space fit, with per-marker yaw and RMS recorded.
 
@@ -66,11 +67,17 @@ shared timestamp. Each eye uses its own rectified intrinsics. The SDK's
 rectified `stereo_transform`, requested in IMAGE coordinates and metres,
 expresses the right optical frame in the left optical frame. It supplies the
 eye-to-eye offset; the DROID hand-eye file is not used to align the eyes.
-One blocked eye may fail while
-the other supplies the accepted pose. This does not reconstruct markers hidden
-in both eyes or combine two eyes that each see only one known marker.
+Both images enter a joint pixel-space fit with a common buffer pose and one
+shared yaw per physical marker. Only actually detected corners participate.
+An eye may see zero or one marker when the combined observations contain
+enough distinct IDs. `min_visible_markers` applies to distinct IDs across a
+successful joint fit. Missing IDs are listed per eye and are never fabricated
+as corner observations.
 
-When both eyes pass, their poses are converted into the left optical frame,
+If joint fitting fails, usable standalone eye poses are considered. A weak,
+collinear-marker pose that disagrees with an eye having a 2D spread of markers
+is discarded in favor of that better-constrained eye, with the reason logged.
+For standalone fallback, both poses are converted into the left optical frame,
 checked against `stereo_max_position_error_m` and
 `stereo_max_rotation_error_rad`, and averaged with marker-count/pixel-fit
 weights. The weights are a heuristic, not calibrated uncertainty. The combined
@@ -115,6 +122,11 @@ camera-to-tool transform. Eye fitting/agreement and diagnostic images are
 still produced when this mounting pose is missing; robot-frame calibration
 then reports that specific missing input and leaves Start disabled.
 
+An explicit `camera.tool_left_camera_pose: [0, 0, 0, 0, 0, 0]` selects the
+operator-requested identity mounting approximation. The SDK stereo offset
+remains active. This assumption is recorded in the calibration and shown in
+the launcher; it is not a measured hand-eye transform.
+
 Pressing Calibrate establishes the operator's assertion that the arm is
 stationary. Manual capture reads the tool pose once and applies no timestamp,
 clock-offset, frame-age, timestamp-advance, or velocity/stationarity gates.
@@ -122,7 +134,7 @@ Timestamps are retained as metadata. Capture still rejects missing hand-eye
 calibration, insufficient visible markers and excessive reprojection error.
 Detection and pose fitting remain inside
 `Buffer.localize()`. One image can contain multiple markers; the example
-requires two per accepted eye. Known cells allow targets for every configured marker even if
+requires two distinct IDs across a joint capture. Known cells allow targets for every configured marker even if
 some are not visible. A low reprojection error cannot establish physical
 calibration accuracy or eliminate all single-view planar pose ambiguity.
 

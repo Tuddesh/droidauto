@@ -127,10 +127,36 @@ def capture_calibration(config, robot, camera, report=None) -> BufferCalibration
     if len(frames) != len(expected_views) or {frame.view for frame in frames} != expected_views:
         raise RuntimeError("Captured views do not match the selected camera mode")
 
-    accepted, eyes, grids = [], {}, {}
+    accepted, eyes = [], {}
+    grids = {frame.view: config.make_buffer(frame.camera_matrix, frame.distortion) for frame in frames}
+    joint_pose = None
+    joint_error = None
+    if stereo and config.layout["marker_orientation"] == "independent":
+        left_frame = next(frame for frame in frames if frame.view == "left")
+        right_frame = next(frame for frame in frames if frame.view == "right")
+        try:
+            if right_frame.left_camera_eye is None:
+                raise ValueError("Right image is missing SDK stereo geometry")
+            candidate = grids["left"].localize_stereo(
+                left_frame.image_rgb, grids["right"], right_frame.image_rgb,
+                transform(right_frame.left_camera_eye),
+            )
+            joint_quality = grids["left"].last_joint_localization
+            if len(joint_quality["visible_marker_ids"]) < config.camera["min_visible_markers"]:
+                raise ValueError("Joint capture has fewer distinct known markers than configured")
+            for view, grid in grids.items():
+                if grid.last_localization is not None and grid.last_localization["reprojection_rms_px"] > config.camera["max_reprojection_rms_px"]:
+                    raise ValueError(f"Joint fit RMS exceeds threshold in {view}")
+            joint_pose = candidate
+            if report is not None:
+                report.data["stereo_fit"] = {"mode": "joint", **joint_quality}
+        except (RuntimeError, ValueError, cv2.error) as exc:
+            joint_error = str(exc)
+            print(f"Joint fit unavailable; considering individual views: {exc}", flush=True)
+            if report is not None:
+                report.data["joint_fit_error"] = joint_error
     for frame in frames:
-        grid = config.make_buffer(frame.camera_matrix, frame.distortion)
-        grids[frame.view] = grid
+        grid = grids[frame.view]
         eye = {"view": frame.view, "accepted": False}
         eyes[frame.view] = eye
         try:
@@ -138,14 +164,19 @@ def capture_calibration(config, robot, camera, report=None) -> BufferCalibration
                 raise ValueError("Captured image belongs to a different camera")
             print(f"Localizing buffer in {frame.view} eye...", flush=True)
             try:
-                camera_buffer = grid.localize(frame.image_rgb)
+                if joint_pose is None:
+                    camera_buffer = grid.localize(frame.image_rgb)
+                elif grid.last_localization is None:
+                    raise ValueError("No known markers detected in this eye; using the other eye")
+                else:
+                    camera_buffer = np.linalg.inv(transform(frame.left_camera_eye)) @ joint_pose
             finally:
                 if report is not None:
                     report.localized(grid, frame.view)
             quality = grid.last_localization
             eye["quality"] = quality
             visible_count = len(quality["visible_marker_ids"])
-            if visible_count < config.camera["min_visible_markers"]:
+            if joint_pose is None and visible_count < config.camera["min_visible_markers"]:
                 raise RuntimeError(f"matched {visible_count} markers; need {config.camera['min_visible_markers']}")
             if quality["reprojection_rms_px"] > config.camera["max_reprojection_rms_px"]:
                 raise RuntimeError(f"RMS {quality['reprojection_rms_px']:.3f} px exceeds {config.camera['max_reprojection_rms_px']:.3f} px")
@@ -171,7 +202,7 @@ def capture_calibration(config, robot, camera, report=None) -> BufferCalibration
             f"{name}: {eye.get('error', 'failed')}" for name, eye in eyes.items()))
 
     agreement = None
-    if len(accepted) == 2:
+    if len(accepted) == 2 and joint_pose is None:
         distance, angle = pose_error(accepted[0][1], accepted[1][1])
         agreement = {"position_error_m": distance, "rotation_error_rad": angle,
                      "frame": "left_camera", "extrinsics_source": "zed_sdk_rectified"}
@@ -179,9 +210,25 @@ def capture_calibration(config, robot, camera, report=None) -> BufferCalibration
             report.data["stereo_agreement"] = agreement
         if (distance > config.camera["stereo_max_position_error_m"]
                 or angle > config.camera["stereo_max_rotation_error_rad"]):
-            raise RuntimeError(f"Stereo poses disagree: {distance * 1000:.1f} mm / {np.degrees(angle):.2f} deg; "
-                               f"limits {config.camera['stereo_max_position_error_m'] * 1000:.1f} mm / "
-                               f"{np.degrees(config.camera['stereo_max_rotation_error_rad']):.2f} deg")
+            def coverage(item):
+                marker_ids = item[3]["visible_marker_ids"]
+                cells = grids[item[0].view].marker_cells()
+                centers = np.array([grids[item[0].view].cell_center_m(*cells[i])[:2] for i in marker_ids])
+                return np.linalg.matrix_rank(centers - centers.mean(axis=0), tol=1e-8)
+            ranks = [coverage(item) for item in accepted]
+            if max(ranks) == 2 and min(ranks) < 2:
+                keep = int(np.argmax(ranks))
+                discarded = accepted[1 - keep][0].view
+                eyes[discarded]["accepted"] = False
+                eyes[discarded]["error"] = "Ambiguous collinear-marker pose disagrees with the eye containing a 2D marker spread"
+                if report is not None:
+                    report.eye_result(discarded, eyes[discarded])
+                    report.data["stereo_fallback"] = eyes[discarded]["error"]
+                accepted = [accepted[keep]]
+            else:
+                raise RuntimeError(f"Stereo poses disagree: {distance * 1000:.1f} mm / {np.degrees(angle):.2f} deg; "
+                                   f"limits {config.camera['stereo_max_position_error_m'] * 1000:.1f} mm / "
+                                   f"{np.degrees(config.camera['stereo_max_rotation_error_rad']):.2f} deg")
     # Pixel-fit weights are a heuristic, not calibrated pose uncertainty.
     weights = np.array([len(q["visible_marker_ids"]) / max(q["reprojection_rms_px"], 0.25) ** 2
                         for _, _, _, q in accepted])
@@ -242,6 +289,7 @@ def capture_calibration(config, robot, camera, report=None) -> BufferCalibration
         "accepted_views": [f.view for f, _, _, _ in accepted],
         "reference_view": frame.view,
         "stereo_agreement": agreement,
+        "pose_source": "joint_stereo" if joint_pose is not None else "monocular_or_fused",
     }
     result = BufferCalibration({
         "version": 1, "created_at_s": time.time(), "image_timestamp_s": frame.timestamp_s,
@@ -251,6 +299,7 @@ def capture_calibration(config, robot, camera, report=None) -> BufferCalibration
         "camera_buffer": camera_buffer.tolist(), "eyes": eyes,
         "hand_eye_file": str(config.resolve(config.camera["hand_eye_file"])),
         "mounting_source": mounting_source,
+        "identity_mount_assumption": bool(np.allclose(tool_left_camera, np.eye(4), atol=1e-12, rtol=0)),
         "tool_left_camera": tool_left_camera.tolist(),
         "camera": {"serial": frame.serial, "view": config.camera["view"], "reference_view": frame.view,
                    "stereo_extrinsics_source": "zed_sdk_rectified",

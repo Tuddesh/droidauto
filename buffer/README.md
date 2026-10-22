@@ -94,6 +94,14 @@ may be arbitrary in-plane angles; IDs still identify known cell centers.
 The legacy default `"aligned"` supports one visible marker when every printed
 top edge points along buffer +X. The reset station uses independent mode.
 
+`left_buffer.localize_stereo(left_rgb, right_buffer, right_rgb,
+T_left_camera_right_camera)` fits one pose from both calibrated views, sharing
+each marker's yaw between eyes. Two distinct known IDs across the pair are
+required; each eye may detect fewer. Missing detections contribute no corners.
+Each buffer retains its own fit diagnostics; `last_joint_localization` on the
+left buffer describes the combined fit. Detection and all pose fitting remain
+inside `Buffer`.
+
 `T_camera_buffer` is a 4×4 homogeneous transform. Its upper-left 3×3 block is
 rotation and its upper-right three values are translation. It maps a point in
 buffer coordinates to the camera frame. `localize()` uses all visible markers

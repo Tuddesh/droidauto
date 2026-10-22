@@ -67,6 +67,7 @@ class CalibrationReport:
             "detected_marker_ids": detected,
             "matched_marker_ids": sorted(set(detected) & set(known)),
             "unknown_marker_ids": sorted(set(detected) - set(known)),
+            "missing_marker_ids": sorted(set(known) - set(detected)),
             "rejected_candidates": detection.get("rejected_candidates", 0),
             "quality": grid.last_localization,
         })
@@ -90,7 +91,8 @@ class CalibrationReport:
             details = self.data["views"][view]
             quality = details.get("quality")
             lines = [f"Camera {frame.serial}, {view} eye",
-                     f"Detected: {details.get('detected_marker_ids', [])}; matched: {details.get('matched_marker_ids', [])}"]
+                     f"Detected: {details.get('detected_marker_ids', [])}; matched: {details.get('matched_marker_ids', [])}",
+                     f"Missing IDs: {details.get('missing_marker_ids', [])} (not used as observations)"]
             if quality is not None:
                 lines.append(f"RMS: {quality['reprojection_rms_px']:.3f} px; marker yaw: {quality.get('marker_yaw_degrees', {})}")
             if details.get("combined_pose_rms_px") is not None:
@@ -99,6 +101,8 @@ class CalibrationReport:
             agreement = self.data.get("stereo_agreement")
             if agreement:
                 lines.append(f"Stereo difference: {agreement['position_error_m'] * 1000:.1f} mm / {np.degrees(agreement['rotation_error_rad']):.2f} deg")
+            if self.data.get("stereo_fit", {}).get("mode") == "joint":
+                lines.append("Joint stereo pose fitted from available corners in both eyes")
             lines.append(status)
             wrapped = [part for line in lines for part in textwrap.wrap(line, width=100)]
             banner = np.full((28 * (len(wrapped) + 1), frame.image_rgb.shape[1], 3), 25, dtype=np.uint8)
