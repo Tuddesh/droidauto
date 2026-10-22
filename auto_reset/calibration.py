@@ -6,7 +6,9 @@ coordinates acquisition, composes reference frames and persists the result.
 
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
+import tempfile
 import time
 
 import cv2
@@ -61,24 +63,27 @@ class BufferCalibration:
         return config.make_buffer(camera["matrix"], camera["distortion"])
 
     def save(self, path):
-        """Keep the single source image alongside an immutable calibration record."""
+        """Replace the active calibration after a successful new capture."""
         path = Path(path)
         image_path = path.with_suffix(".png")
-        if path.exists() or image_path.exists():
-            raise FileExistsError(f"Calibration already exists at {path}; archive it before recalibrating")
         if self.source_image_rgb is None:
             raise ValueError("Only a newly captured calibration has a source image to save")
         path.parent.mkdir(parents=True, exist_ok=True)
         success, png = cv2.imencode(".png", cv2.cvtColor(self.source_image_rgb, cv2.COLOR_RGB2BGR))
         if not success:
             raise RuntimeError("Could not encode calibration image")
-        # Exclusive creation avoids silently replacing a pose trusted by another task.
-        with image_path.open("xb") as output:
-            output.write(png.tobytes())
         self.record["source_image"] = image_path.name
-        with path.open("x") as output:
-            json.dump(self.record, output, indent=2, allow_nan=False)
-            output.write("\n")
+        payload = (json.dumps(self.record, indent=2, allow_nan=False) + "\n").encode()
+        for destination, contents in ((image_path, png.tobytes()), (path, payload)):
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as output:
+                    temporary = Path(output.name)
+                    output.write(contents)
+                os.replace(temporary, destination)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
 
 
 def load_hand_eye(path, serial: str, view: str) -> np.ndarray:

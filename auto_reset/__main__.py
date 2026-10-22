@@ -32,8 +32,6 @@ def main():
     config = StationConfig(args.config)
     calibration_path = config.resolve(config.data["calibration_file"])
     if args.command == "calibrate":
-        if calibration_path.exists() or calibration_path.with_suffix(".png").exists():
-            raise FileExistsError(f"Archive the existing calibration before recalibrating: {calibration_path}")
         report = CalibrationReport(config.resolve(config.data["log_directory"]), not args.no_display)
         try:
             print(f"Connecting to DROID at {config.data['robot_endpoint']}...", flush=True)

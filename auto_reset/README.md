@@ -1,5 +1,29 @@
 # Auto-reset components: marker hover
 
+## One-window launcher
+
+From the repository with its environment active:
+
+```bash
+python scripts/marker_hover.py
+```
+
+The window loads the saved calibration if available. Use **Calibrate /
+Recalibrate** to capture a new image and replace the active calibration,
+**Start loop** to visit markers, and **Stop** to cancel with a best-effort hold.
+**One cycle** limits execution to one pass. **Initialize controllers** explicitly
+restarts DROID when needed. The analyzed image, marker IDs, RMS and any errors
+appear in the same window; **Raw image** switches to the exact unmodified input.
+The default config is `configs/marker_hover.local.json`, resolved from the
+script's repository directory. Override with `--config PATH` if needed.
+
+Recalibration requires no manual archiving. Only a successful replacement
+updates the active JSON/PNG; timestamped input images and reports remain in the
+ignored attempt history. A failed calibration disables Start until another
+successful calibration in that session. Stop is cooperative between RPC calls;
+an outstanding RPC may take up to its timeout to return. It is not an emergency
+stop.
+
 This is the first composed robot task for the reset stack: localize the buffer
 from **one stationary wrist-camera image**, save the pose, then repeatedly hover
 the robot TCP 20 cm above each configured marker for five seconds. No camera
@@ -113,8 +137,8 @@ the result. Press **R** for the raw image, **A** for annotations and **Q** or
 Escape to close. On a headless SSH session, paths are printed instead. Use
 `--no-display` to deliberately suppress the window; diagnostic files are still
 saved. An accepted pose is additionally saved as the main calibration JSON/PNG
-in `runs/marker_hover/`. Existing accepted calibration files are never
-overwritten; archive the JSON and matching PNG before deliberately recalibrating.
+in `runs/marker_hover/`. A successful recalibration replaces the active JSON/PNG
+automatically; failed attempts leave them intact.
 
 Inspect targets offline; this command opens no camera or robot connection:
 

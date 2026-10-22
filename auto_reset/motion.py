@@ -13,6 +13,10 @@ import numpy as np
 from .transforms import interpolate, pose_error, transform
 
 
+class MotionCancelled(Exception):
+    """The operator requested a normal task stop."""
+
+
 @dataclass
 class HoverTarget:
     marker_id: int
@@ -70,9 +74,14 @@ class HoverPlanner:
 class CartesianExecutor:
     """Stream small absolute poses through DROID's IK, then verify measured arrival."""
 
-    def __init__(self, robot, settings):
+    def __init__(self, robot, settings, cancel_requested=None):
         self.robot, self.settings = robot, settings
         self.period = 1 / settings["rate_hz"]
+        self.cancel_requested = cancel_requested or (lambda: False)
+
+    def _check_cancel(self):
+        if self.cancel_requested():
+            raise MotionCancelled("Stopped by operator")
 
     def _within(self, actual, target) -> bool:
         distance, angle = pose_error(actual, target)
@@ -87,6 +96,7 @@ class CartesianExecutor:
             raise RuntimeError(f"DROID motion failed or tracking error exceeded bounds ({distance:.4f} m, {angle:.4f} rad)")
 
     def move_to(self, target):
+        self._check_cancel()
         start = self.robot.read_state().tool_pose
         target = transform(target)
         distance, angle = pose_error(start, target)
@@ -99,6 +109,7 @@ class CartesianExecutor:
         count = math.ceil(1.5 * duration / self.period)
         previous = start
         for step in range(1, count + 1):
+            self._check_cancel()
             tick = time.monotonic()
             state = self.robot.read_state()
             self._check_tracking(state, previous)
@@ -112,6 +123,7 @@ class CartesianExecutor:
     def _settle(self, target):
         deadline = time.monotonic() + self.settings["settle_timeout_s"]
         while time.monotonic() < deadline:
+            self._check_cancel()
             state = self.robot.read_state()
             self._check_tracking(state, target)
             if self._within(state.tool_pose, target) and np.max(np.abs(state.joint_velocities)) <= 0.05:
@@ -124,6 +136,7 @@ class CartesianExecutor:
         """Count dwell only while measured at the target; deviations fail the task."""
         started = time.monotonic()
         while True:
+            self._check_cancel()
             tick = time.monotonic()
             state = self.robot.read_state()
             self._check_tracking(state, target)

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import time
 
-from .motion import CartesianExecutor, HoverPlanner
+from .motion import CartesianExecutor, HoverPlanner, MotionCancelled
 from .transforms import transform_to_pose
 
 
@@ -31,10 +31,10 @@ class EventLog:
 class MarkerHoverTask:
     """Use one frozen calibration for all visits; never acquire images in the loop."""
 
-    def __init__(self, config, calibration, robot, log):
+    def __init__(self, config, calibration, robot, log, cancel_requested=None):
         self.config, self.calibration, self.robot, self.log = config, calibration, robot, log
         self.planner = HoverPlanner(config, calibration)
-        self.executor = CartesianExecutor(robot, config.motion)
+        self.executor = CartesianExecutor(robot, config.motion, cancel_requested=cancel_requested)
 
     def run(self, cycles=None):
         if cycles is not None and (isinstance(cycles, bool) or not isinstance(cycles, int) or cycles < 1):
@@ -61,7 +61,7 @@ class MarkerHoverTask:
                 cycle += 1
                 self.log.emit("cycle_completed", cycle=cycle)
             self.log.emit("task_completed", cycles=cycle)
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, MotionCancelled):
             self.log.emit("task_cancelled", completed_cycles=cycle)
             try:
                 self.executor.hold_current()
