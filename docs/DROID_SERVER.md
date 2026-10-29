@@ -34,8 +34,8 @@ The backend provides:
 - explicit `initialize()` controller startup;
 - `read_state()`, `require_stationary()` and `read_calibration_pose()`;
 - `joint_target_for_pose()`, `command_pose()` and `command_joints()`;
-- declared `open_gripper()` / `close_gripper()` methods that currently raise
-  `NotImplementedError`.
+- blocking `open_gripper()` / `close_gripper()`, `read_gripper_position()` and
+  `wait_until_stopped()`.
 
 Opening the RPC connection does not initialize controllers or move the robot.
 `initialize()` calls `launch_controller()` followed by `launch_robot()`, with
@@ -56,7 +56,7 @@ manual-capture age/stationarity gates; the operator establishes stationarity.
 | Joint positions | Seven angles in radians. |
 | Cartesian poses | `[x, y, z, roll, pitch, yaw]`, metres and fixed-axis XYZ radians. |
 | Transform matrices | `T_parent_child`, mapping child-frame coordinates into the parent frame. |
-| DROID gripper position | Normalized position, 0 open and 1 closed; reset backend methods are unimplemented. |
+| DROID gripper position | Normalized position, 0 open and 1 closed; both reset backend methods are implemented. |
 
 `command_joints()` sends one `update_joints(joints, False, blocking)` request.
 The backend validates the list's shape/numeric values and does not maintain a
@@ -72,7 +72,10 @@ passing an IK `(joint_angles, success)` tuple into a tensor constructor.
 The underlying move is generated in joint space; the backend does not promise
 a straight Cartesian path. Nonblocking `command_pose()` forwards to DROID's
 incremental Cartesian API. No client interpolation or scene-reset policy is
-implemented by this backend.
+implemented by this backend. `wait_until_stopped()` waits for sustained low
+joint velocities and checks the server's previous-command status, without
+comparing the tool pose to the requested endpoint. Gripper methods call
+`update_gripper(position, False, True)` once, with 0 open and 1 closed.
 
 ## Current integration limitations
 
@@ -93,7 +96,9 @@ implemented by this backend.
 ## Camera backend
 
 `src/auto_reset/hardware/zed.py` provides `ZedWristCamera` and `CameraFrame`.
-It captures rectified left/right images and matching intrinsics. Stereo eyes
+It captures rectified left/right images at HD2K (2208 x 1242 per eye) and
+15 FPS with matching intrinsics. The reset runner does not open this camera;
+localization is deferred and observations are supplied directly. Stereo eyes
 share one SDK grab and timestamp. The SDK rectified stereo transform supplies
 the right optical frame relative to the left in IMAGE coordinates/metres.
 

@@ -1,8 +1,8 @@
 """Existing DROID hardware backend, independent of experiment entry points.
 
 Connections and controller initialization are explicit. The current endpoint
-IK/joint adapter is retained; gripper methods declare future reset support and
-remain unimplemented. No reset orchestration or GUI belongs in this module.
+IK/joint adapter is retained. Gripper commands and motion-settling waits use
+the existing server API. No reset orchestration or GUI belongs in this module.
 """
 
 from dataclasses import dataclass
@@ -146,9 +146,42 @@ class DroidRobot:
         return self._client.update_joints(joints.tolist(), False, blocking)
 
     def open_gripper(self) -> None:
-        """Open the gripper through the reset backend; not implemented yet."""
-        raise NotImplementedError("Reset gripper opening is not implemented")
+        """Send one blocking normalized-position command: 0 is fully open."""
+        return self._client.update_gripper(0.0, False, True)
 
     def close_gripper(self) -> None:
-        """Close the gripper through the reset backend; not implemented yet."""
-        raise NotImplementedError("Reset gripper closing is not implemented")
+        """Send one blocking normalized-position command: 1 is fully closed."""
+        return self._client.update_gripper(1.0, False, True)
+
+    def read_gripper_position(self) -> float:
+        """Read normalized gripper feedback without arm-motion/state-age gates."""
+        state, _ = self._client.get_robot_state()
+        position = float(state["gripper_position"])
+        if not np.isfinite(position):
+            raise RuntimeError("DROID returned a nonfinite gripper position")
+        return position
+
+    def wait_until_stopped(self, *, timeout_s: float = 60.0,
+                           velocity_threshold_rad_s: float = 0.02,
+                           settle_s: float = 0.2) -> RobotState:
+        """Wait for sustained low measured joint velocities, without endpoint gating.
+
+        DROID owns trajectory execution. This wait only establishes when to
+        send the next endpoint; it does not compare measured/commanded poses.
+        """
+        if (not np.isfinite([timeout_s, velocity_threshold_rad_s, settle_s]).all()
+                or min(timeout_s, velocity_threshold_rad_s, settle_s) <= 0):
+            raise ValueError("Motion wait parameters must be positive")
+        deadline, quiet_since = time.monotonic() + timeout_s, None
+        while time.monotonic() < deadline:
+            state = self.read_state()
+            if np.max(np.abs(state.joint_velocities)) <= velocity_threshold_rad_s:
+                quiet_since = time.monotonic() if quiet_since is None else quiet_since
+                if time.monotonic() - quiet_since >= settle_s:
+                    if not state.command_successful:
+                        raise RuntimeError("DROID reports the previous command was unsuccessful")
+                    return state
+            else:
+                quiet_since = None
+            time.sleep(0.05)
+        raise TimeoutError(f"Robot did not stop moving within {timeout_s:g} seconds")

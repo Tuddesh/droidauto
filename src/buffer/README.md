@@ -8,8 +8,8 @@ side of the DroidAuto scene-reset station.
 [`PhysicalObject` dataclass](../scene/README.md). Identity, dimensions, observed
 pose, reference-frame name and observation timestamp have one owner.
 `SceneObject` is another subclass of the same parent for manipulation objects.
-Localization methods retain their existing implementation; shared observation
-update methods are prepared interfaces and remain unimplemented.
+Localization methods retain their existing implementation. Shared observation
+methods accept supplied poses and can mark an entity unobserved.
 
 ## Files
 

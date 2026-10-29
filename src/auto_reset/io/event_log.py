@@ -13,16 +13,18 @@ import time
 class EventLog:
     """Append complete events; preserve failed attempts and completed operations."""
 
-    def __init__(self, path):
+    def __init__(self, path, *, echo=True):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = self.path.open("x")
+        self.echo = echo
 
     def emit(self, event, **fields):
         record = {"time_s": time.time(), "event": event, **fields}
         self._file.write(json.dumps(record, allow_nan=False) + "\n")
         self._file.flush()
-        print(event, json.dumps(fields), flush=True)
+        if self.echo:
+            print(event, json.dumps(fields), flush=True)
 
     def close(self):
         self._file.close()

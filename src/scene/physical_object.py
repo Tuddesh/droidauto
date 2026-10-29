@@ -3,13 +3,16 @@
 Buffer, BufferItem and SceneObject inherit these fields. A pose is a 4x4
 T_reference_object in metres; pose_frame explicitly names the reference.
 Supply object_id from configuration when identity must survive new processes.
-Observation updates are declared for later implementation.
+Observations are supplied by the caller; this class performs no localization.
 """
 
 from dataclasses import dataclass, field
 from uuid import uuid4
+import math
 
 import numpy as np
+
+from .transforms import transform
 
 
 @dataclass(kw_only=True, eq=False)
@@ -23,9 +26,14 @@ class PhysicalObject:
     observed_at: float | None = None
 
     def update_pose(self, pose: np.ndarray, reference_frame: str, timestamp: float) -> None:
-        """Update this object's observed pose and provenance; not implemented yet."""
-        raise NotImplementedError("Physical-object observation updates are not implemented")
+        """Copy a supplied measured pose and its named frame/timestamp."""
+        if not isinstance(reference_frame, str) or not reference_frame.strip():
+            raise ValueError("An observation needs a named reference frame")
+        if not math.isfinite(timestamp):
+            raise ValueError("Observation timestamp must be finite")
+        self.pose = transform(pose)
+        self.pose_frame, self.observed_at = reference_frame, float(timestamp)
 
     def mark_unobserved(self) -> None:
-        """Mark an object missing from the latest observation; not implemented yet."""
-        raise NotImplementedError("Missing-object observation handling is not implemented")
+        """Clear an observation whose current pose is no longer known."""
+        self.pose = self.pose_frame = self.observed_at = None

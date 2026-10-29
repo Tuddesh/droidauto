@@ -1,0 +1,11 @@
+*
+!Dockerfile
+!pyproject.toml
+!README.md
+!src/
+!src/**
+!configs/
+!configs/station.example.json
+!configs/reset.example.json
+**/__pycache__
+**/*.pyc

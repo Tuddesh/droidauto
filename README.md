@@ -1,147 +1,127 @@
 # DroidAuto — automatic scene resetting on DROID
 
-DroidAuto restores a physical manipulation scene to a requested configuration
-on the [DROID robot platform](https://droid-dataset.github.io/droid/).
+DroidAuto implements a reset operation: accept supplied scene poses and a target
+configuration, plan object transfers, execute them through DROID, and verify
+placements from separately supplied final measurements. VLA execution and
+model evaluation orchestration are outside this project's implementation scope.
 
-## Scope
+Image localization is deferred. The runtime does not open a camera or detect
+markers. Existing buffer localization/calibration utilities remain available
+independently. Cube geometry and marker metadata are retained.
 
-The reset operation accepts a target configuration, observes the scene, plans
-and executes object transfers, verifies the resulting placements, and records
-its outcome. An external caller decides when to request a reset.
+## Current behavior
 
-The runtime boundary delegates robot control to the DROID server and image
-localization to the supplied tools/service. Scene models, target definitions,
-reset planning, sequencing, verification and logging belong to DroidAuto.
-Application/container startup and localization-service wiring are not yet
-implemented.
+- Cube: **40 x 40 x 20 mm**, centered **38 mm** top marker,
+  **DICT_ARUCO_ORIGINAL / ID 13**. Origin is the geometric center.
+- Scene observations are supplied in the **robot base frame**.
+- Targets are object poses in **buffer coordinates**, or free buffer cells with
+  an explicit support-plane height.
+- Configured grasps are **T_object_tool**, using DROID's actual reported tool
+  frame. A top-grasp helper accepts a measured tool-to-gripping-point offset.
+- Planning creates lift/transit/pick/place/gripper endpoints. There is no dense
+  interpolation or client-side positional-error gate. DROID owns IK and motion;
+  the client waits for joint motion to settle before sending another endpoint.
+- After execution, state is `awaiting_verification`, with `success: null`.
+  Only supplied final measurements can establish success or failure.
+- Events, commands, errors and final placement deviations are logged as JSONL.
 
-```text
-reset request + target configuration
-                ↓
-        observe physical scene
-                ↓
-        plan and execute reset
-                ↓
-        observe and verify result
-                ↓
-        reset outcome + measurements
-```
+This is a simple endpoint transfer planner, not collision-aware path planning.
+The corridor must be clear. Joint-space moves between endpoints do not promise
+straight Cartesian paths. No automatic retry of a motion command is performed.
+Hardware integration limitations are described in [DROID integration](docs/DROID_SERVER.md).
 
-## Objectives
-
-1. Restore objects to a defined physical configuration.
-2. Integrate the supplied localization and existing robot-control stack.
-3. Measure reset reliability and final placement deviations.
-4. Preserve reset observations, actions, timing, outcomes and failures.
-
-## Project layout
+## Layout
 
 ```text
 droidauto/
-├── pyproject.toml
-├── environment.yml
 ├── src/
 │   ├── auto_reset/
-│   │   ├── manager.py
-│   │   ├── planner.py
-│   │   ├── target_configuration.py
-│   │   ├── hardware/        DROID and ZED adapters
-│   │   ├── calibration/     Buffer and hand-eye calibration
-│   │   └── io/              Station configuration and event logs
-│   ├── scene/              Shared physical and manipulation-object models
-│   └── buffer/             Gridfinity layout, fixtures and localization
-├── tests/                  Manual marker-pose camera diagnostic
-├── scripts/                Reserved; no production entry points yet
-├── experiments/            Independent perception utilities
-├── configs/                Station examples; local settings ignored
-├── docs/
-└── openscad/
+│   │   ├── manager.py, planner.py, target_configuration.py
+│   │   ├── __main__.py       JSON request/container entry point
+│   │   ├── hardware/         DROID and independent ZED adapters
+│   │   ├── calibration/      Existing buffer and hand-eye utilities
+│   │   └── io/               Configuration and event logging
+│   ├── scene/                Shared physical objects and cube grasp geometry
+│   └── buffer/               Grid geometry, fixtures and buffer localization
+├── scripts/                  Interactive manual hardware tools
+├── configs/                  Examples; local JSON ignored
+├── docs/                     Current state and interfaces
+├── Dockerfile
+├── environment.yml
+└── pyproject.toml
 ```
 
-`src/` directly contains the three installable packages. `droidauto` is the
-project/distribution name; there is no additional nested `droidauto/` package.
-Only reset-manager, planner and target-configuration modules remain at the
-root of `src/auto_reset/`.
-
-## Framework status
-
-The new reset operation is **not implemented**. Its workflow methods raise
-`NotImplementedError`; constructing the data objects does not operate hardware.
-
-- [`PhysicalObject` and scene models](src/scene/README.md) share identity,
-  dimensions and observed pose/provenance across buffers, fixtures and objects.
-- [`Buffer`](src/buffer/README.md) retains its existing layout/localization API.
-- [`ResetManager`](src/auto_reset/README.md) owns reset orchestration and its
-  internal outcome state, with a planner, target configuration, supplied
-  localization adapter and concrete camera/robot collaborators.
-
-No unused abstract driver layer is introduced. Localization-tool integration,
-grasp selection, reset planning, execution and verification are future work.
-The retained hardware adapters are explicit integrations rather than a reset
-implementation.
+`src/` directly contains the three installable packages; there is no nested
+`droidauto` Python package. `scripts/` contains the
+[interactive CLI gripper tool](scripts/README.md). `tests/` has no tracked content.
+Existing local experiments, datasets, captures and environments are ignored.
 
 ## Installation
 
-From this repository, create/activate its own Conda environment, then install
-this local project in editable mode:
-
 ```bash
-conda env create -p ./.conda -f environment.yml  # first installation only
+conda env create -p ./.conda -f environment.yml
 conda activate ./.conda
 python -m pip install --no-deps -e .
 ```
 
-`environment.yml` supplies the environment dependencies; `pyproject.toml`
-defines the Python distribution and discovers packages under `src/` only.
-Editable installation makes imports independent of the shell's current folder.
-The lab's ZED SDK/Python bindings remain a separately installed hardware
-requirement. No application initializes hardware on import.
+No hardware initializes on import. The reset runtime does not require ROS,
+Patrik's environment, a GPU, or the ZED SDK. Independent ZED camera use still
+requires the lab's installed SDK bindings.
 
-Update environment dependencies when needed:
-
-```bash
-conda env update -p ./.conda -f environment.yml --prune
-```
-
-## Configuration
+## Configure and run
 
 ```bash
 cp configs/station.example.json configs/station.local.json
+cp configs/reset.example.json configs/reset.local.json
 ```
 
-Use the station's actual marker layout, dimensions and measured camera mounting
-transform. The example contains no reset method or task-object loader.
-The local manual hand-eye capture experiment lives under the ignored
-`experiments/calibration/` directory. `scripts/` is empty.
-There is no executable reset CLI until the manager workflow is implemented.
+The numeric example poses/transit settings are illustrative, not a measured lab
+setup. Set `objects[].manipulation.tool_to_grasp_m` to the measured offset for
+DROID's reported tool origin, or configure explicit `grasps` instead. The
+example deliberately leaves this unknown offset null. Supply actual base-frame
+observations, starting tool pose, buffer support height and transit height.
+Marker-camera extrinsics are not needed when supplying cube poses directly.
 
-## Experiments
-
-Experiments are local, ignored material independent of the reset manager.
-The [architecture document](docs/ARCHITECTURE.md) describes the current
-source organization, object ownership and implementation status.
-
-## Data and supporting work
-
-Datasets, captures, model outputs, environments, and generated meshes are
-ignored. The existing YCB-V subset is held-out evaluation data; see
-[dataset provenance](docs/YCBV_DATASET.md). The separate `object_detector/`
-checkout is unchanged.
-
-From the repository root, the independent dataset browser is:
+Plan without a DROID connection:
 
 ```bash
-python -m experiments.perception.browse_ycbv
+python -m auto_reset --config configs/station.local.json --request configs/reset.local.json
 ```
 
-The exploratory buffer geometry/photo code lives under
-`experiments/buffer_geometry/`. The [manual camera test](tests/README.md) uses
-the current camera object to outline markers and display camera-relative poses.
-There is no automated project test suite. Fabrication sources remain under
-`openscad/gridfinity/aruko_square/`.
+For persistent manager state, omit `--request` and send one JSON request per
+stdin line. `--execute` enables the robot connection and `reset` requests:
 
-## References
+```bash
+python -m auto_reset --config configs/station.local.json --execute
+```
 
-- [DROID developer documentation](https://droid-dataset.github.io/droid/)
-- [DROID integration notes](docs/DROID_SERVER.md)
-- [Reset architecture](src/auto_reset/README.md)
+Controller relaunch is separate and explicit: add `--initialize-controllers`
+only when controller initialization is needed. Detailed request examples and
+Python methods are in [the reset framework](src/auto_reset/README.md).
+
+A one-shot reset process exits with verification pending. To subsequently
+verify that same reset, keep the JSON-lines process running and submit `verify`.
+No object motion or fresh observation is inferred from a successful RPC.
+
+## Docker
+
+```bash
+docker build -t droidauto .
+docker run --rm -i --network host \
+  -v "$PWD/configs:/app/configs:ro" \
+  -v "$PWD/runs:/app/runs" \
+  droidauto --config configs/station.local.json
+```
+
+The default container can plan using supplied poses. Add `--execute` to enable
+DROID requests. It contains headless OpenCV and no camera SDK or display stack.
+Only source, packaging files and example configs enter the build context;
+local configs, datasets, environments and recordings are excluded.
+
+## Supporting material
+
+- [Current architecture](docs/ARCHITECTURE.md)
+- [Scene and cube methods](src/scene/README.md)
+- [Buffer geometry/localization](src/buffer/README.md)
+- [DROID integration](docs/DROID_SERVER.md)
+- [Dataset provenance](docs/YCBV_DATASET.md)

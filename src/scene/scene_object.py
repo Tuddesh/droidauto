@@ -23,8 +23,10 @@ class SceneObject(PhysicalObject):
     manipulation: dict[str, object] = field(default_factory=dict)
 
     def grasp_poses(self) -> list[np.ndarray]:
-        """Return object-relative grasp frames; grasp handling is not implemented."""
-        raise NotImplementedError("Scene-object grasp handling is not implemented")
+        """Return configured T_object_tool candidates, without selecting a grasp."""
+        if not self.grasps:
+            raise ValueError(f"No tool grasp transform configured for {self.object_id}")
+        return [transform(pose) for pose in self.grasps]
 
 
 @dataclass(kw_only=True, eq=False)
@@ -36,7 +38,7 @@ class Cube(SceneObject):
     outward from that face. Its ID and concrete 5x5-pattern dictionary can be
     bound once from a confirmed localization. Marker yaw relative to the
     cube's physical X/Y edges is explicit; centering does not establish yaw.
-    Image localization and grasp generation remain external/unimplemented.
+    Images are localized externally. Top grasps require a measured tool offset.
     """
 
     dimensions_m: tuple[float, float, float] = (0.04, 0.04, 0.02)
@@ -47,6 +49,34 @@ class Cube(SceneObject):
     marker_size_m: float = 0.038
     marker_center_xy_m: tuple[float, float] = (0.0, 0.0)
     marker_yaw_rad: float | None = None
+
+    def top_grasp(self, tool_to_grasp_m: float, *, grasp_center_z_m: float = 0.0,
+                  yaw_rad: float = 0.0) -> np.ndarray:
+        """Return T_cube_tool for a downward tool-Z grasp.
+
+        tool_to_grasp_m is the measured distance from DROID's reported tool
+        origin to the gripping point along tool +Z. The gripping point is at
+        cube (0, 0, grasp_center_z_m); yaw chooses the tool's X/Y orientation.
+        This offset must be measured for the actual gripper/tool frame.
+        """
+        if (not np.isfinite([tool_to_grasp_m, grasp_center_z_m, yaw_rad]).all()
+                or tool_to_grasp_m < 0):
+            raise ValueError("Grasp offset must be nonnegative and all grasp parameters finite")
+        if abs(grasp_center_z_m) > self.dimensions_m[2] / 2:
+            raise ValueError("Gripping point must be within the cube height")
+        c, s = math.cos(yaw_rad), math.sin(yaw_rad)
+        return transform([[c, s, 0, 0], [s, -c, 0, 0],
+                          [0, 0, -1, tool_to_grasp_m + grasp_center_z_m], [0, 0, 0, 1]])
+
+    def grasp_poses(self) -> list[np.ndarray]:
+        """Use explicit grasps or build one from measured top-grasp parameters."""
+        if self.grasps:
+            return super().grasp_poses()
+        if self.manipulation.get("tool_to_grasp_m") is None:
+            return super().grasp_poses()
+        return [self.top_grasp(self.manipulation["tool_to_grasp_m"],
+                              grasp_center_z_m=self.manipulation.get("grasp_center_z_m", 0.0),
+                              yaw_rad=self.manipulation.get("grasp_yaw_rad", 0.0))]
 
     @property
     def marker_plane_z_m(self) -> float:

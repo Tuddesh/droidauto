@@ -1,0 +1,39 @@
+{
+  "operation": "plan",
+  "observations": {
+    "buffer-main": [
+      0.4,
+      -0.15,
+      0.05,
+      0,
+      0,
+      0
+    ],
+    "cube-1": [
+      0.45,
+      0.15,
+      0.06,
+      0,
+      0,
+      0
+    ]
+  },
+  "current_tool_pose": [
+    0.4,
+    0,
+    0.4,
+    3.141592653589793,
+    0,
+    0
+  ],
+  "targets": {
+    "cube-1": {
+      "cell": [
+        2,
+        2
+      ],
+      "support_height_m": 0.0,
+      "yaw_rad": 0.0
+    }
+  }
+}

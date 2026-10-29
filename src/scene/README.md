@@ -1,118 +1,70 @@
 # Physical scene models
 
-This package prepares the shared object model for automatic scene reset.
-
 ```text
-PhysicalObject (dataclass)
-├── Buffer                         buffer/buffer.py
-├── BufferItem                     buffer/buffer_item.py
-│   └── ArucoTile                   buffer/items/aruco_tile.py
-└── SceneObject                    scene_object.py
-    └── Cube                       scene_object.py
+PhysicalObject
+├── Buffer
+├── BufferItem
+│   └── ArucoTile
+└── SceneObject
+    └── Cube
 ```
 
-## Shared parameters
+`PhysicalObject` owns `object_id`, `dimensions_m`, `pose`, `pose_frame` and
+`observed_at`. `update_pose(pose, reference_frame, timestamp)` copies a rigid
+transform and records provenance. `mark_unobserved()` clears the observation.
+A pose is T_reference_object in metres. Configured IDs persist across sessions;
+a generated UUID only identifies that individual instance. Buffer dimensions
+span the marker reference plane and do not model the fixture's solid volume.
 
-`PhysicalObject` owns `object_id`, `dimensions_m`, `pose`, `pose_frame`, and
-`observed_at`. Subclasses add their own parameters rather than another identity
-or observed pose. Supply a configured `object_id` for identity across sessions;
-the generated default UUID only identifies a newly constructed instance.
+`SceneObject` adds object-relative `grasps` and `manipulation` parameters.
+`grasp_poses()` returns configured T_object_tool matrices, where tool is the
+frame reported by DROID, not an assumed fingertip frame.
 
-`pose` means `T_reference_object`: it maps object coordinates into the frame
-named by `pose_frame`. Translation is in metres. Buffer observations may be
-expressed in the robot base frame, while task-object observations may use the
-named buffer frame. A matrix without its reference frame is not a complete
-observation. `dimensions_m=None` means physical extents are unspecified.
+## Cube
 
-Buffer's dimensions describe its grid reference-plane extent, with zero Z
-thickness; they do not model the fixture's solid volume. BufferItem adds the
-integer cell footprint. Its read-only `item_id` property is a compatibility
-alias for the inherited `object_id`, a string.
-Buffer placement uses `object_id` directly.
-
-`SceneObject` adds object-relative grasp frames and manipulation parameters.
-`Cube` defines the project's **40 x 40 x 20 mm** manipulation block using
-inherited `dimensions_m=(0.04, 0.04, 0.02)`. Its origin is the geometric center,
-X/Y follow the square base, and +Z points toward the top face. The top marker
-plane is at `marker_plane_z_m=0.01` relative to that origin.
+The block is **40 x 40 x 20 mm**, with a centered **38 mm** marker on top.
+Its origin is the geometric center, X/Y follow its base edges, and +Z points
+out of the top face. The marker plane is at Z=+10 mm. The station example
+records **DICT_ARUCO_ORIGINAL, ID 13**. No image detection is implemented here.
 
 ```python
 from scene import Cube
 
 cube = Cube(object_id="cube-1")
+cube.bind_marker(13, "DICT_ARUCO_ORIGINAL")
 ```
 
-The marker is **38 mm wide**, centered on the top face. Defaults are
-`marker_size_m=0.038`, `marker_center_xy_m=(0, 0)` and `marker_family="5x5"`.
-Its numeric ID and concrete dictionary remain unset until a confirmed
-localization supplies them. Being centered does not determine its printed yaw
-relative to the physical block edges; `marker_yaw_rad` remains explicit.
-
-## Marker binding and conversion
-
-```python
-# Bind the ID/dictionary reported by the localization service once the cube
-# has been identified. No image detector is implemented in the object model.
-cube.bind_marker(marker_id, dictionary)
-
-# Persist it in the station's local config for subsequent launches.
-station_config.save_marker_binding(cube.object_id, marker_id, dictionary)
-
-# T_reference_marker: origin at marker center, +Z out of the top face.
-center = cube.center_from_marker(marker_pose)
-```
-
-A matching repeated binding is allowed. A different ID/dictionary is rejected
-rather than silently changing the physical object's identity. The concrete
-`DICT_5X5_50`, `_100`, `_250`, `_1000`, or `DICT_ARUCO_ORIGINAL` dictionary comes from the localization
-integration; the code does not guess a dictionary size or select the first
-marker seen in the scene. Binding is in-memory on the cube; saving it through
-`StationConfig` explicitly persists it. Runtime object loading remains pending.
-`DICT_ARUCO_ORIGINAL` also uses a 5x5 bit pattern; the observed project cube
-matches ID 13 in that dictionary.
-
-The centered-marker conversion is:
+Marker identity can be persisted through `StationConfig.save_marker_binding`.
+Matching repeated bindings are allowed; changing an existing identity is
+rejected. DICT_5X5_50/100/250/1000 and DICT_ARUCO_ORIGINAL are supported 5x5
+families. Center conversion uses:
 
 ```text
 cube center = marker position - 0.010 * marker outward Z axis
 ```
 
-This follows the marker normal when the block is tilted. It does not subtract
-10 mm along an unrelated camera/world Z axis. Center conversion does not
-require knowing marker yaw relative to the block edges.
+`center_from_marker(T_reference_marker)` performs this geometry without needing
+marker yaw. For edge-aligned full orientation, supply `marker_yaw_rad` relative
+to the block's edges. Then `marker_mount_transform()` returns T_cube_marker and
+`pose_from_marker()` computes T_reference_marker @ inverse(T_cube_marker).
+These are pure transforms; they do not localize images or update observations.
 
-For a full cube pose with axes along the physical block edges, configure the
-marker mounting yaw (radians, measured about cube +Z):
+## Grasp configuration
 
-```python
-cube.marker_yaw_rad = known_marker_yaw_relative_to_cube
-cube_pose = cube.pose_from_marker(marker_pose)
+An explicit `grasps` list of T_cube_tool matrices (or six-value poses in station
+JSON) overrides generated top grasps. Otherwise configure:
+
+```json
+{"manipulation":{"tool_to_grasp_m":null,"grasp_center_z_m":0.0,"grasp_yaw_rad":0.0}}
 ```
 
-`marker_mount_transform()` returns `T_cube_marker` and `pose_from_marker()`
-computes `T_reference_marker @ inverse(T_cube_marker)`. Full orientation
-conversion requires a specified yaw and does not silently assume alignment.
-The marker coordinate convention must match the colleague's output; the
-[OpenCV marker-pose documentation](https://docs.opencv.org/4.x/d5/dae/tutorial_aruco_detection.html)
-describes the usual centered marker frame. Six-value observations can be
-converted to matrices with `scene.transforms.pose_to_transform()` when their
-rotation convention is fixed-axis XYZ radians.
+Replace null with the **measured** distance from DROID's tool origin to the
+gripping point along tool +Z. There is no guessed default for this hardware
+measurement. `Cube.top_grasp(tool_to_grasp_m, grasp_center_z_m=0, yaw_rad=0)`
+returns a tool-Z-down T_cube_tool with the gripping point at the selected cube
+height. The planner uses `grasp_poses()[0]` for both pickup and placement.
+The current helper assumes a downward top grasp on an upright cube.
 
-These conversion methods are pure geometry. They do not run localization,
-update the object's observed pose, generate grasps or command hardware.
-
-## Prepared interfaces
-
-- `PhysicalObject.update_pose(pose, reference_frame, timestamp)`
-- `PhysicalObject.mark_unobserved()`
-- `SceneObject.grasp_poses()`
-
-The observation/grasp methods intentionally raise `NotImplementedError`.
-The concrete supplied-tool adapter API is deferred until integration.
-`Buffer.localize()` and
-`Buffer.localize_stereo()` retain their existing implementations and ownership.
-They return camera-relative estimates; future manager observation code will
-compose them into the desired reference frame and update shared object state.
-
-Desired placements belong to `auto_reset.TargetConfiguration`; they do not
-overwrite the objects' observed poses. See the [reset interfaces](../auto_reset/README.md).
+Grasp tool yaw is relative to cube edges, independently of marker mounting yaw.
+Scene observations passed directly to the reset stack must already describe
+the physical cube frame, rather than an unconverted camera/marker frame.

@@ -1,8 +1,7 @@
 """Core reset objects; supporting hardware, calibration and I/O live in packages.
 
-Manager/planner/target operations are explicit placeholders for future work.
-The archived hover experiment is not a dependency. Imports perform no hardware
-initialization, and the package intentionally has no executable reset CLI yet.
+Poses are supplied externally; imports perform no hardware initialization.
+The command-line/container entry point is available via python -m auto_reset.
 """
 
 from .manager import ResetManager
