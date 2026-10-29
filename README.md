@@ -52,8 +52,7 @@ droidauto/
 ```
 
 `src/` directly contains the three installable packages; there is no nested
-`droidauto` Python package. `scripts/` contains the
-[interactive CLI gripper tool](scripts/README.md). `tests/` has no tracked content.
+`droidauto` Python package. `scripts/` contains manual utilities.
 Existing local experiments, datasets, captures and environments are ignored.
 
 ## Installation
