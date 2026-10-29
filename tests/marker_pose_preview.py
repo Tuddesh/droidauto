@@ -81,14 +81,14 @@ def estimate_pose(corners, frame, marker_size_m):
 
 
 def render(frame, cube, detector):
-    """Outline markers and annotate their camera-relative pose and cube center."""
+    """Outline all markers with a fixed-size panel showing the first marker pose."""
     image = cv2.cvtColor(frame.image_rgb, cv2.COLOR_RGB2BGR)
     lines = [f"Camera {frame.serial} / {frame.view.upper()} | marker size {cube.marker_size_m*1000:g} mm",
              "CAMERA coordinates: X right, Y down, Z forward | XYZ mm | XYZ roll/pitch/yaw deg",
              "Q/Esc quit | P print poses | S save image/JSON | R meter selected region | A full-image auto exposure"]
     results = []
     detections = detector.detect(frame.image_rgb)
-    for detection in detections:
+    for index, detection in enumerate(detections):
         points = detection["corners"]
         cv2.polylines(image, [np.rint(points).astype(np.int32)], True, (0, 255, 0), 2, cv2.LINE_AA)
         cv2.circle(image, tuple(np.rint(points[0]).astype(int)), 4, (0, 0, 255), -1)
@@ -106,20 +106,25 @@ def render(frame, cube, detector):
                       "marker_xyz_camera_m": values[:3], "marker_rpy_xyz_deg": angles.tolist(),
                       "cube_center_camera_m": center.tolist(), "reprojection_rms_px": rms}
             results.append(record)
-            if len(results) <= 5:
+            if index == 0:
                 xyz = np.asarray(values[:3]) * 1000
                 lines.extend([f"ID {detection['id']} | {', '.join(detection['dictionaries'])}",
                               f"    marker XYZ: {xyz[0]:+.1f}, {xyz[1]:+.1f}, {xyz[2]:+.1f} | RMS {rms:.2f} px",
                               f"    marker RPY: {angles[0]:+.1f}, {angles[1]:+.1f}, {angles[2]:+.1f} | cube center XYZ: "
                               + ", ".join(f"{v:+.1f}" for v in center*1000)])
         except (ValueError, cv2.error) as exc:
-            lines.append(f"ID {detection['id']}: pose unavailable: {str(exc).splitlines()[-1]}")
+            if index == 0:
+                lines.append(f"ID {detection['id']}: pose unavailable: {str(exc).splitlines()[-1]}")
     if not detections:
         lines.append("No marker decoded in the selected dictionaries. Check dictionary, visible border and image quality.")
     elif not results:
         lines.append(f"Decoded {len(detections)} marker(s), but pose estimation failed; see errors above.")
+    if len(detections) > 1:
+        lines.append(f"{len(detections)} markers decoded; panel shows the first. P/S includes all successful poses.")
     lines.append("All XYZ estimates assume the displayed marker size. Use --marker-id after identifying the cube.")
-    banner = np.full((28 * len(lines) + 12, image.shape[1], 3), 25, dtype=np.uint8)
+    # Constant height prevents imshow from rescaling the camera image whenever
+    # detection appears/disappears or pose estimation fails.
+    banner = np.full((28 * 8 + 12, image.shape[1], 3), 25, dtype=np.uint8)
     for i, line in enumerate(lines):
         cv2.putText(banner, line, (10, 24 + 28*i), cv2.FONT_HERSHEY_SIMPLEX, .53,
                     (235, 235, 235), 1, cv2.LINE_AA)

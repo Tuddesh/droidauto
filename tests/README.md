@@ -13,6 +13,9 @@ not required for this camera-only test. Close other camera viewers first.
 
 The preview outlines 5x5 markers and shows IDs, camera-relative XYZ in mm,
 marker XYZ roll/pitch/yaw in degrees, and the converted cube center. Camera
+image and status panel dimensions stay fixed when detection comes and goes.
+The panel shows the first detected marker; printed/saved results include all
+successfully estimated poses. Camera
 axes are +X right, +Y down, +Z forward. All marker poses assume the cube's
 38 mm marker size. Other marker sizes will produce an incorrect metric scale.
 The cube center is 10 mm inward along the marker normal; its edge-aligned
