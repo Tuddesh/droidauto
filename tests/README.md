@@ -35,10 +35,14 @@ To select it explicitly:
 python tests/marker_pose_preview.py --dictionary DICT_ARUCO_ORIGINAL --marker-id 13
 ```
 
-Keys: **Q/Esc** quit, **P** print values, **S** save images/JSON, **R** select an
+Keys: **Space** freeze/resume, **Q/Esc** quit, **P** print values, **S** save images/JSON, **R** select an
 automatic-exposure metering region, **A** restore full-image metering. Exposure
 and gain remain automatic. Captures are saved under ignored
 `runs/marker_pose_preview/`.
+
+While frozen, the displayed frame and pose values remain unchanged. **P** and
+**S** print/save that exact frozen frame and its results. The window title
+indicates **FROZEN**; press **Space** again to return to the live feed.
 
 For a finite capture without a desktop window:
 

@@ -85,7 +85,7 @@ def render(frame, cube, detector):
     image = cv2.cvtColor(frame.image_rgb, cv2.COLOR_RGB2BGR)
     lines = [f"Camera {frame.serial} / {frame.view.upper()} | marker size {cube.marker_size_m*1000:g} mm",
              "CAMERA coordinates: X right, Y down, Z forward | XYZ mm | XYZ roll/pitch/yaw deg",
-             "Q/Esc quit | P print poses | S save image/JSON | R meter selected region | A full-image auto exposure"]
+             "Space freeze/resume | Q/Esc quit | P print | S save | R exposure region | A full-image auto exposure"]
     results = []
     detections = detector.detect(frame.image_rgb)
     for index, detection in enumerate(detections):
@@ -167,19 +167,26 @@ def main():
     print(f"Using ZedWristCamera {serial}, {args.view} eye, marker {cube.marker_size_m*1000:g} mm", flush=True)
     print("Camera only: no DROID connection, no robot initialization or movement.", flush=True)
     count = 0
+    frozen = False
     try:
         with ZedWristCamera(serial, args.view, auto_exposure_roi=config["camera"].get("auto_exposure_roi")) as camera:
             if not args.no_display:
                 cv2.namedWindow(title, cv2.WINDOW_NORMAL)
                 cv2.resizeWindow(title, 1280, 920)
             while True:
-                frame = camera.capture()
-                annotated, payload = render(frame, cube, detector)
-                count += 1
+                if not frozen:
+                    frame = camera.capture()
+                    annotated, payload = render(frame, cube, detector)
+                    count += 1
                 key = -1
                 if not args.no_display:
                     cv2.imshow(title, annotated)
-                    key = cv2.waitKey(1) & 0xff
+                    key = cv2.waitKey(30 if frozen else 1) & 0xff
+                if key == ord(" "):
+                    frozen = not frozen
+                    status = "FROZEN - Space to resume" if frozen else "LIVE - Space to freeze"
+                    cv2.setWindowTitle(title, f"{title} | {status}")
+                    print(status, flush=True)
                 if key in (ord("p"), ord("P")):
                     print(json.dumps(payload, indent=2), flush=True)
                 if args.no_display or key in (ord("s"), ord("S")):
