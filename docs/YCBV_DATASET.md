@@ -1,4 +1,4 @@
-# Source record — YCB-V BOP'19–24 test subset
+# YCB-V evaluation data
 
 ## Dataset identity
 
@@ -27,29 +27,29 @@ to reduce redundancy and exclude images with erroneous ground-truth poses.
 
 The BOP catalogue identifies YCB-V / the original PoseCNN project as MIT
 licensed. Retain this source record when copying or redistributing this data,
-and cite Xiang et al. (2018) and Hodaň et al. (2018), as listed in the project
-README.
+and cite Xiang et al. (2018) and Hodaň et al. (2018), using the original PoseCNN and BOP project references above.
 
-## Local acquisition record
+## Local data
 
-- **Retrieved on:** 2026-09-28 (Europe/Prague)
-- **Retrieved by:** `curl -fL --retry 3 --retry-delay 2`
-- **Downloaded archive name:** `ycbv_test_bop19.zip`
-- **Archive transfer size:** 629 MiB (advertised distribution: 660 MB)
-- **Extracted size:** 669 MiB
-- **Archive disposition:** removed after successful extraction to stay below
-  the project's 2 GB data limit.
-- **Extracted file count:** 10,086 files under `test/` (900 RGB images).
+The extracted data lives under `data/ycbv_test_bop19/test/`. It contains
+900 selected RGB images and associated BOP annotations. Data is ignored by
+Git and used by the independent dataset browser:
 
-### Integrity spot-check
+```bash
+python -m experiments.perception.browse_ycbv
+```
 
-The following SHA-256 was calculated after extraction:
+The source distribution is `ycbv_test_bop19.zip` at the linked BOP mirror.
+
+## Reference checksum
+
+SHA-256 for the local annotation file:
 
 ```text
 45e6bbd9e7cd2403d45f4fbbe70944173f781fb5dcd8f9b51dad0840713f5c68  test/000048/scene_gt.json
 ```
 
-To repeat it:
+Read the local checksum with:
 
 ```bash
 sha256sum data/ycbv_test_bop19/test/000048/scene_gt.json

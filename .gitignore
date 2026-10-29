@@ -1,4 +1,5 @@
 # Local datasets, captures, model outputs, and checkpoints
+experiments/
 /data/
 /configs/*.local.json
 /object_detector/
@@ -20,9 +21,9 @@
 *.mp4
 
 # Generated photos, meshes, and marker images
-/buffer/tests/photos/**
-!/buffer/tests/photos/**/
-!/buffer/tests/photos/**/.gitkeep
+/experiments/buffer_geometry/photos/**
+!/experiments/buffer_geometry/photos/**/
+!/experiments/buffer_geometry/photos/**/.gitkeep
 /openscad/gridfinity/aruko_square/img/
 /openscad/gridfinity/aruko_square/output/
 *.stl
@@ -45,3 +46,8 @@ venv/
 
 # Unrelated local scratch script
 /geometrie.py
+
+# Python build and installation artifacts
+/build/
+/dist/
+*.egg-info/

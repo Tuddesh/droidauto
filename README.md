@@ -76,169 +76,115 @@ DroidAuto evaluation client ── ZeroRPC ── DROID server on the NUC
 The DROID server is the robot-control boundary; it is not itself a VLA policy
 server. Camera acquisition, policy interaction, evaluation orchestration,
 outcome measurement, and experiment logging belong on the client side. See
-[DROID server and client architecture](docs/DROID_SERVER.md) for the researched
+[DROID server and client architecture](docs/DROID_SERVER.md) for the current
 interface and integration notes.
 
-## Current work areas
-
-- DROID client and robot-control integration.
-- Automatic rollout, reset, verification, and logging state machine.
-- Scene-state and outcome perception.
-- [Gridfinity buffer layout and ArUco localization](buffer/README.md).
-- Gridfinity fixtures and generated ArUco markers under `openscad/`.
-- Mask R-CNN, synthetic-data, and YCB-V perception experiments.
-
-## Buffer calibration and marker-hover task
-
-The reusable [`auto_reset` components](auto_reset/README.md) capture one
-stationary wrist-camera stereo pair on the lab PC, call `Buffer.localize()` for
-each eye with independently rotated markers, save the
-buffer pose in robot coordinates and reuse it for repeated marker visits.
-The task hovers the TCP 20 cm above each marker for five seconds. Configuration,
-offline target preview and lab-PC launch commands are documented in that
-module's README. The geometric waypoint planner currently assumes a cleared
-workspace; obstacle-aware planning remains future integration work.
-
-## Single joint-offset move
-
-From this PC or the control PC, using DroidAuto's own environment:
-
-```bash
-conda activate "$PWD/.conda"
-python scripts/joint_offset_move.py
-```
-
-This script uses the existing DROID ZeroRPC interface at `192.168.88.12:4242`.
-It initializes the arm and gripper controllers, reads the measured joint
-positions, and previews a target of **+pi/8 radians (+22.5 degrees) on all seven
-joints**. Press Enter to send the move or Ctrl+C to cancel. It reads fresh
-feedback again after confirmation, then sends that relative offset using a
-blocking `update_joints` call and reports the measured result. It does not
-copy a joint-limit table into the client or clamp the requested target. This
-does not establish that a particular target or path is collision-free or
-within the robot's limits; the current DROID API has no metadata query.
-
-The NUC must be reachable and the robot ready for control. No camera software
-or installation of Patrik's full stack is needed on the computer running this
-script. Use `--nuc-ip` to select a different server.
-
-Both the offset script and the jogger use a 60-second RPC timeout and Patrik's
-startup sequence: retry `launch_controller()` followed by `launch_robot()` up
-to five times on a remote error, with 0.1 seconds between attempts. Feedback
-must be no more than 0.5 seconds old. Motion commands are sent once; only
-controller initialization is retried.
-
-## Manual joint jog
-
-`scripts/joint_jogger.py` is a small GUI for testing the DROID ZeroRPC server
-on the NUC. It uses this repository's own environment and a direct ZeroRPC
-client; it does not import the separate `control_droid` checkout. It displays
-all seven joint angles, provides a slider and Jog button for each joint, and
-has Open gripper and Close gripper buttons. It does not open cameras or
-initialize the robot automatically. Relaunch controller explicitly restarts
-the NUC arm and gripper controllers after a confirmation dialog.
-
-Run it from this PC or any other machine that can reach the NUC on port 4242.
-From the `droidauto` checkout:
-
-```bash
-conda env create -p ./.conda -f environment.yml  # first time only
-conda activate ./.conda
-python scripts/joint_jogger.py
-```
-
-The numbers at the left are measured joint angles. The sliders choose relative
-steps between -1° and +1°; their center value of 0° is not the robot's current
-position. Click a joint's Jog button to send that step. Slider movement alone
-sends no robot command. Use Read state to refresh the displayed angles. The
-gripper buttons send fully open (0) or fully closed (1) commands.
-
-If the NUC responds with frozen robot feedback, click Relaunch controller only
-when the robot workspace is clear and no other control session is active. The
-button calls DROID's `launch_controller()` followed by `launch_robot()`, then
-waits for fresh robot state before enabling motion. A failed relaunch leaves
-motion disabled and reports the error in the GUI.
-
-The script accepts steps of at most one degree, rejects a target within five
-degrees of a configured Panda joint limit, and checks that the arm is still
-before sending a command. It requires recent robot timestamps that advance
-between two state reads, and disables motion buttons if feedback is stale,
-unavailable, or a command outcome is uncertain. Read state must succeed before
-motion is available again. These checks do not establish collision clearance
-or make the tool suitable for unattended use;
-inspect the robot's workspace and use it with an operator at the station.
-
-## Repository layout
+## Project layout
 
 ```text
-buffer/                  Grid layout, items, and camera localization
-auto_reset/              Capture, saved calibration, motion and composed tasks
-configs/                 Tracked examples; machine-specific *.local.json ignored
-docs/                    Design and integration notes
-openscad/                Fixtures, fiducials, and fabrication automation
-maskrcnn_experiments/    Dataset inspection and perception experiments
-object_detector/         Separate object-detection checkout (local, ignored)
-data/                    Local datasets (ignored)
+droidauto/
+├── pyproject.toml
+├── environment.yml
+├── src/
+│   ├── auto_reset/
+│   │   ├── manager.py
+│   │   ├── planner.py
+│   │   ├── target_configuration.py
+│   │   ├── hardware/        DROID and ZED adapters
+│   │   ├── calibration/     Buffer and hand-eye calibration
+│   │   └── io/              Station configuration and event logs
+│   ├── scene/              Shared physical and manipulation-object models
+│   └── buffer/             Gridfinity layout, fixtures and localization
+├── tests/                  Reserved; no project tests yet
+├── scripts/                Reserved; no production entry points yet
+├── experiments/            Independent perception utilities
+├── configs/                Station examples; local settings ignored
+├── docs/
+└── openscad/
 ```
 
-## Environment
+`src/` directly contains the three installable packages. `droidauto` is the
+project/distribution name; there is no additional nested `droidauto/` package.
+Only reset-manager, planner and target-configuration modules remain at the
+root of `src/auto_reset/`.
 
-The tracked `environment.yml` defines the project dependencies. Create its
-local Conda environment once from the repository root:
+## Framework status
+
+The new reset operation is **not implemented**. Its workflow methods raise
+`NotImplementedError`; constructing the data objects does not operate hardware.
+
+- [`PhysicalObject` and scene models](src/scene/README.md) share identity,
+  dimensions and observed pose/provenance across buffers, fixtures and objects.
+- [`Buffer`](src/buffer/README.md) retains its existing layout/localization API.
+- [`ResetManager`](src/auto_reset/README.md) owns reset orchestration and its
+  internal outcome state, with a planner, target configuration, supplied
+  localization adapter and concrete camera/robot collaborators.
+
+No unused abstract driver layer is introduced. Localization-tool integration,
+grasp selection, reset planning, execution and verification are future work.
+The retained hardware adapters are explicit integrations rather than a reset
+implementation.
+
+## Installation
+
+From this repository, create/activate its own Conda environment, then install
+this local project in editable mode:
 
 ```bash
-conda env create -p ./.conda -f environment.yml
+conda env create -p ./.conda -f environment.yml  # first installation only
 conda activate ./.conda
+python -m pip install --no-deps -e .
 ```
 
-The installed `.conda/` directory is ignored by Git. When `environment.yml`
-changes, run `conda env update -p ./.conda -f environment.yml --prune`. The
-environment includes the ZeroRPC client and Tk GUI for the joint jogger, and the NumPy,
-OpenCV, Matplotlib, and Pillow libraries used by this repository's current
-geometry and dataset inspection code. PyTorch and a policy inference runtime
-are separate, optional additions for later experiments.
+`environment.yml` supplies the environment dependencies; `pyproject.toml`
+defines the Python distribution and discovers packages under `src/` only.
+Editable installation makes imports independent of the shell's current folder.
+The lab's ZED SDK/Python bindings remain a separately installed hardware
+requirement. No application initializes hardware on import.
 
-## Included evaluation data
-
-`data/ycbv_test_bop19/test/` contains the BOP'19–24 test subset of YCB-Video:
-900 annotated RGB-D images from 12 scenes, including full and visible instance
-masks.
-
-This is **held-out evaluation data**. It must not be used to train or tune a
-model. Training data must be stored separately and documented before use. In
-particular, the original YCB-V `data_syn` poses overlap the test images and must
-not be used for a standard BOP comparison.
-
-Dataset provenance, retrieval information, licensing, and an integrity
-spot-check are recorded in
-[the dataset source record](docs/YCBV_DATASET.md).
-
-The separate `object_detector/` checkout comes from
-<https://github.com/malenickymartin/object_detector> and is not part of this
-repository. Generated ArUco SVGs and STLs, the local base STL, captured photos,
-and downloaded datasets are also excluded from Git. To regenerate the marker
-meshes on a new machine, supply a local Gridfinity base STL to
-`openscad/gridfinity/aruko_square/build_aruco_stls.py` with `--base-stl`.
-
-To inspect the labels:
+Update environment dependencies when needed:
 
 ```bash
-conda run -n droidauto python maskrcnn_experiments/browse_ycbv.py
+conda env update -p ./.conda -f environment.yml --prune
 ```
 
-## Safety and project status
+## Configuration
 
-This repository is a research prototype. Code that can command the robot must
-not be treated as safe for unattended use until the real platform has validated
-workspace limits, command-rate and timeout handling, collision behaviour,
-emergency-stop procedures, reset recovery, and operator supervision. A network
-heartbeat is not a substitute for a physical emergency stop or a robot-side
-safety mechanism.
+```bash
+cp configs/station.example.json configs/station.local.json
+```
+
+Use the station's actual marker layout, dimensions and measured camera mounting
+transform. The example contains no reset method or task-object loader.
+The local manual hand-eye capture experiment lives under the ignored
+`experiments/calibration/` directory. `scripts/` is empty.
+There is no executable reset CLI until the manager workflow is implemented.
+
+## Experiments
+
+Experiments are local, ignored material independent of the reset manager.
+The [architecture document](docs/ARCHITECTURE.md) describes the current
+source organization, object ownership and implementation status.
+
+## Data and supporting work
+
+Datasets, captures, model outputs, environments, and generated meshes are
+ignored. The existing YCB-V subset is held-out evaluation data; see
+[dataset provenance](docs/YCBV_DATASET.md). The separate `object_detector/`
+checkout is unchanged.
+
+From the repository root, the independent dataset browser is:
+
+```bash
+python -m experiments.perception.browse_ycbv
+```
+
+The exploratory buffer geometry/photo code lives under
+`experiments/buffer_geometry/`. `tests/` is empty; there is no project test suite
+yet. Fabrication sources remain under `openscad/gridfinity/aruko_square/`.
 
 ## References
 
 - [DROID developer documentation](https://droid-dataset.github.io/droid/)
-- [Official DROID platform repository](https://github.com/droid-dataset/droid)
-- [DROID paper](https://arxiv.org/abs/2403.12945)
-- [YCB-Video / PoseCNN paper](https://arxiv.org/abs/1711.00199)
-- [BOP benchmark](https://bop.felk.cvut.cz/)
+- [DROID integration notes](docs/DROID_SERVER.md)
+- [Reset architecture](src/auto_reset/README.md)

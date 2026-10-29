@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "droidauto"
+version = "0.1.0"
+description = "Automatic scene-reset and real-world VLA evaluation on DROID"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2,<3",
+    "scipy>=1.14,<2",
+    "opencv-python>=4.10,<5",
+    "zerorpc==0.6.3",
+]
+
+[project.optional-dependencies]
+experiments = ["matplotlib", "pillow"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["auto_reset*", "buffer*", "scene*"]
