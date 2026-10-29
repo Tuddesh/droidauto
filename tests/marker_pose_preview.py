@@ -20,7 +20,8 @@ from scene import Cube
 from scene.transforms import transform_to_pose
 
 ROOT = Path(__file__).resolve().parents[1]
-DICTIONARIES = ("DICT_5X5_50", "DICT_5X5_100", "DICT_5X5_250", "DICT_5X5_1000")
+DICTIONARIES = ("DICT_5X5_50", "DICT_5X5_100", "DICT_5X5_250", "DICT_5X5_1000",
+                "DICT_ARUCO_ORIGINAL")
 
 
 class MarkerPreview:
@@ -86,7 +87,8 @@ def render(frame, cube, detector):
              "CAMERA coordinates: X right, Y down, Z forward | XYZ mm | XYZ roll/pitch/yaw deg",
              "Q/Esc quit | P print poses | S save image/JSON | R meter selected region | A full-image auto exposure"]
     results = []
-    for detection in detector.detect(frame.image_rgb):
+    detections = detector.detect(frame.image_rgb)
+    for detection in detections:
         points = detection["corners"]
         cv2.polylines(image, [np.rint(points).astype(np.int32)], True, (0, 255, 0), 2, cv2.LINE_AA)
         cv2.circle(image, tuple(np.rint(points[0]).astype(int)), 4, (0, 0, 255), -1)
@@ -106,13 +108,16 @@ def render(frame, cube, detector):
             results.append(record)
             if len(results) <= 5:
                 xyz = np.asarray(values[:3]) * 1000
-                lines.extend([f"ID {detection['id']} | marker XYZ: {xyz[0]:+.1f}, {xyz[1]:+.1f}, {xyz[2]:+.1f} | RMS {rms:.2f} px",
+                lines.extend([f"ID {detection['id']} | {', '.join(detection['dictionaries'])}",
+                              f"    marker XYZ: {xyz[0]:+.1f}, {xyz[1]:+.1f}, {xyz[2]:+.1f} | RMS {rms:.2f} px",
                               f"    marker RPY: {angles[0]:+.1f}, {angles[1]:+.1f}, {angles[2]:+.1f} | cube center XYZ: "
                               + ", ".join(f"{v:+.1f}" for v in center*1000)])
         except (ValueError, cv2.error) as exc:
             lines.append(f"ID {detection['id']}: pose unavailable: {str(exc).splitlines()[-1]}")
-    if not results:
-        lines.append("No usable 5x5 marker. Outline/position require the complete marker border to be visible.")
+    if not detections:
+        lines.append("No marker decoded in the selected dictionaries. Check dictionary, visible border and image quality.")
+    elif not results:
+        lines.append(f"Decoded {len(detections)} marker(s), but pose estimation failed; see errors above.")
     lines.append("All XYZ estimates assume the displayed marker size. Use --marker-id after identifying the cube.")
     banner = np.full((28 * len(lines) + 12, image.shape[1], 3), 25, dtype=np.uint8)
     for i, line in enumerate(lines):

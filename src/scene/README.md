@@ -64,10 +64,12 @@ center = cube.center_from_marker(marker_pose)
 
 A matching repeated binding is allowed. A different ID/dictionary is rejected
 rather than silently changing the physical object's identity. The concrete
-`DICT_5X5_50`, `_100`, `_250`, or `_1000` dictionary comes from the localization
+`DICT_5X5_50`, `_100`, `_250`, `_1000`, or `DICT_ARUCO_ORIGINAL` dictionary comes from the localization
 integration; the code does not guess a dictionary size or select the first
 marker seen in the scene. Binding is in-memory on the cube; saving it through
 `StationConfig` explicitly persists it. Runtime object loading remains pending.
+`DICT_ARUCO_ORIGINAL` also uses a 5x5 bit pattern; the observed project cube
+matches ID 13 in that dictionary.
 
 The centered-marker conversion is:
 

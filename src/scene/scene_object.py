@@ -33,7 +33,7 @@ class Cube(SceneObject):
 
     The object origin is its geometric center. X/Y span the square base and
     +Z points toward the centered 38 mm top marker. The marker's +Z must point
-    outward from that face. Its ID and concrete DICT_5X5_* dictionary can be
+    outward from that face. Its ID and concrete 5x5-pattern dictionary can be
     bound once from a confirmed localization. Marker yaw relative to the
     cube's physical X/Y edges is explicit; centering does not establish yaw.
     Image localization and grasp generation remain external/unimplemented.
@@ -57,19 +57,21 @@ class Cube(SceneObject):
         """Bind one confirmed marker; matching repeats are allowed, rebinding is not.
 
         The concrete dictionary comes from localization rather than guessing a
-        DICT_5X5_* size. This method does not choose among visible candidates.
+        5x5-pattern dictionary. This method does not choose among visible candidates.
         StationConfig.save_marker_binding() can persist the resulting identity.
         """
-        supported = {"DICT_5X5_50", "DICT_5X5_100", "DICT_5X5_250", "DICT_5X5_1000"}
+        supported = {"DICT_5X5_50": 50, "DICT_5X5_100": 100,
+                     "DICT_5X5_250": 250, "DICT_5X5_1000": 1000,
+                     "DICT_ARUCO_ORIGINAL": 1024}
         if dictionary not in supported:
-            raise ValueError("Cube marker must use a concrete OpenCV DICT_5X5_* dictionary")
+            raise ValueError("Cube marker must use DICT_5X5_* or DICT_ARUCO_ORIGINAL")
         if isinstance(marker_id, (bool, np.bool_)):
             raise ValueError("Marker ID must be an integer")
         try:
             marker_id = operator.index(marker_id)
         except TypeError:
             raise ValueError("Marker ID must be an integer") from None
-        if not 0 <= marker_id < int(dictionary.rsplit("_", 1)[1]):
+        if not 0 <= marker_id < supported[dictionary]:
             raise ValueError("Marker ID is outside the reported dictionary")
         if self.marker_id is not None and self.marker_id != marker_id:
             raise ValueError(f"Cube is already bound to marker {self.marker_id}")
