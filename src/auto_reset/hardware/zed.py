@@ -1,4 +1,4 @@
-"""Native-resolution rectified ZED images from one explicitly selected camera."""
+"""Full-resolution rectified ZED images (2208 x 1242 at 15 FPS on ZED Mini)."""
 
 from dataclasses import dataclass
 from collections import deque
@@ -41,8 +41,8 @@ class ZedWristCamera:
         camera = sl.Camera()
         params = sl.InitParameters()
         params.set_from_serial_number(int(self.serial))
-        params.camera_resolution = sl.RESOLUTION.HD720
-        params.camera_fps = 30
+        params.camera_resolution = sl.RESOLUTION.HD2K
+        params.camera_fps = 15
         params.depth_mode = sl.DEPTH_MODE.NONE
         params.camera_image_flip = sl.FLIP_MODE.OFF
         params.coordinate_units = sl.UNIT.METER

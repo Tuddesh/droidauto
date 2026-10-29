@@ -11,6 +11,11 @@ loads `configs/station.local.json` when present, otherwise the station example.
 It opens no DROID connection and does not initialize or move the robot. FCI is
 not required for this camera-only test. Close other camera viewers first.
 
+The camera captures **2208 x 1242 per eye at 15 FPS** (`HD2K`). Detection,
+pose estimation and saved images use that full resolution and the SDK's
+corresponding intrinsics. The preview window may scale the image to fit the
+screen; this does not reduce the resolution used by detection or saving.
+
 The preview outlines 5x5 markers and shows IDs, camera-relative XYZ in mm,
 marker XYZ roll/pitch/yaw in degrees, and the converted cube center. Camera
 image and status panel dimensions stay fixed when detection comes and goes.

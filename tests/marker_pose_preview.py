@@ -83,7 +83,8 @@ def estimate_pose(corners, frame, marker_size_m):
 def render(frame, cube, detector):
     """Outline all markers with a fixed-size panel showing the first marker pose."""
     image = cv2.cvtColor(frame.image_rgb, cv2.COLOR_RGB2BGR)
-    lines = [f"Camera {frame.serial} / {frame.view.upper()} | marker size {cube.marker_size_m*1000:g} mm",
+    height, width = frame.image_rgb.shape[:2]
+    lines = [f"Camera {frame.serial} / {frame.view.upper()} | {width}x{height} | marker size {cube.marker_size_m*1000:g} mm",
              "CAMERA coordinates: X right, Y down, Z forward | XYZ mm | XYZ roll/pitch/yaw deg",
              "Space freeze/resume | Q/Esc quit | P print | S save | R exposure region | A full-image auto exposure"]
     results = []
@@ -129,6 +130,7 @@ def render(frame, cube, detector):
         cv2.putText(banner, line, (10, 24 + 28*i), cv2.FONT_HERSHEY_SIMPLEX, .53,
                     (235, 235, 235), 1, cv2.LINE_AA)
     payload = {"camera_serial": frame.serial, "view": frame.view, "image_timestamp_s": frame.timestamp_s,
+               "image_size_px": [width, height],
                "camera_matrix": frame.camera_matrix.tolist(), "image_settings": frame.image_settings,
                "markers": results}
     return np.vstack([image, banner]), payload
@@ -165,6 +167,7 @@ def main():
     title = f"DroidAuto marker pose - {serial} {args.view}"
     limit = args.frames if args.frames is not None else (1 if args.no_display else None)
     print(f"Using ZedWristCamera {serial}, {args.view} eye, marker {cube.marker_size_m*1000:g} mm", flush=True)
+    print("Capture: HD2K (2208 x 1242 per eye), 15 FPS; detection uses the full-resolution image.", flush=True)
     print("Camera only: no DROID connection, no robot initialization or movement.", flush=True)
     count = 0
     frozen = False
