@@ -1,6 +1,6 @@
 """Scene-reset orchestration interface and manager-owned outcome state.
 
-ResetManager will own observe/plan/execute/verify between policy rollouts. It
+ResetManager will own observe/plan/execute/verify for a reset request. It
 holds injected hardware/perception/planning collaborators and retains results
 in its own state. Workflow methods deliberately raise NotImplementedError:
 constructing the manager does not connect hardware or execute a reset.

@@ -8,12 +8,15 @@ configuration remains future work; the core scaffold is dependency-injected.
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
+import tempfile
 
 import numpy as np
 
 from buffer import Buffer
 from buffer.items import ArucoTile
+from scene import Cube
 
 
 def positive(value, name: str) -> float:
@@ -60,6 +63,37 @@ class StationConfig:
     def resolve(self, path) -> Path:
         path = Path(path).expanduser()
         return path if path.is_absolute() else self.path.parent / path
+
+    def save_marker_binding(self, object_id: str, marker_id: int, dictionary: str) -> None:
+        """Persist one confirmed cube marker identity in this station config.
+
+        Discovery and selecting the cube belong to the localization integration.
+        Existing bindings must match; only the selected object's marker fields
+        are written. The image-processing service is never called here.
+        """
+        data = json.loads(self.path.read_text())
+        matches = [item for item in data.get("objects", []) if item.get("object_id") == object_id]
+        if len(matches) != 1 or matches[0].get("type") != "cube":
+            raise ValueError("Expected exactly one configured cube with the requested object_id")
+        item = matches[0]
+        marker = item.get("marker", {})
+        cube = Cube(object_id=object_id, marker_id=marker.get("id"),
+                    marker_dictionary=marker.get("dictionary"))
+        cube.bind_marker(marker_id, dictionary)
+        marker.update(family=cube.marker_family, id=cube.marker_id, dictionary=cube.marker_dictionary)
+        item["marker"] = marker
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", dir=self.path.parent, delete=False) as file:
+                temporary = Path(file.name)
+                json.dump(data, file, indent=2, allow_nan=False)
+                file.write("\n")
+            os.chmod(temporary, self.path.stat().st_mode & 0o777)
+            os.replace(temporary, self.path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        self.data["objects"] = data["objects"]
 
     @property
     def layout_digest(self) -> str:

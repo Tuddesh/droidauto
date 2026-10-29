@@ -1,3 +1,24 @@
-# DroidAuto project assignment
+# DroidAuto implementation instructions
+
+## Scope
+
+This repository implements **scene resetting only** on DROID:
+
+- Accept a requested target configuration.
+- Observe and localize the physical scene.
+- Plan and execute the required object transfers.
+- Verify the resulting placement and retain reset results/logs.
+- Delegate robot control to the DROID server and image localization to the
+  supplied localization service/tools.
+
+VLA inference, training, hosting, deployment, policy rollouts and evaluation
+orchestration are outside the implementation scope. Do not make architectural
+choices for those systems. An external caller can request a reset; its other
+responsibilities do not belong to this project.
+
+The implementation scope above governs repository work. The original
+assignment below is broader research context and does not expand that scope.
+
+## Assignment context
 
 Vision-Language-Action (VLA) models are increasingly evaluated on real robots, because simulation is not always a reliable proxy for real-world performance. However, real-world evaluation is slow and labour-intensive: after every rollout, a human must reset the scene, record the outcome, and prepare the next trial. This limits the number of trials, makes results noisy, and hinders reproducible comparison between models. This project will design and build an automatic evaluation station on the DROID platform that runs repeated policy rollouts with minimal human involvement. Between rollouts, the station will restore the scene to a defined initial configuration using an existing scene-reset method, and it will log each trial together with its outcome. The project will analyze how reliable the reset is, how closely reset scenes match the intended initial conditions, and how reset errors affect measured policy performance. The station will be validated by evaluating selected VLA models on a set of manipulation tasks and comparing the results with manually conducted evaluations. The results should enable larger and more reproducible real-world evaluations of VLA models, which is also relevant for future research on real-to-sim validation and on reinforcement-learning fine-tuning in the real world.

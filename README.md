@@ -1,83 +1,38 @@
-# DroidAuto — automated real-world VLA evaluation on DROID
+# DroidAuto — automatic scene resetting on DROID
 
-DroidAuto is the working repository for a semestral project that is intended to
-continue into a bachelor's thesis. Its goal is to design, build, and validate an
-automatic evaluation station for Vision-Language-Action (VLA) policies on the
-[DROID robot platform](https://droid-dataset.github.io/droid/).
+DroidAuto restores a physical manipulation scene to a requested configuration
+on the [DROID robot platform](https://droid-dataset.github.io/droid/).
 
-Mask R-CNN and YCB-Video experiments in this repository are supporting
-perception work. They are not the main purpose of the project.
+## Scope
 
-## Motivation
+The reset operation accepts a target configuration, observes the scene, plans
+and executes object transfers, verifies the resulting placements, and records
+its outcome. An external caller decides when to request a reset.
 
-VLA models are increasingly evaluated on physical robots because simulation is
-not always a reliable proxy for real-world performance. Real-world evaluation,
-however, is slow and labour-intensive: after every rollout, a person normally
-has to restore the scene, record the result, and prepare the next trial. This
-limits the number of trials, introduces variability, and makes comparisons
-between policies difficult to reproduce.
+The runtime boundary delegates robot control to the DROID server and image
+localization to the supplied tools/service. Scene models, target definitions,
+reset planning, sequencing, verification and logging belong to DroidAuto.
+Application/container startup and localization-service wiring are not yet
+implemented.
 
-This project will build an evaluation station that executes repeated policy
-rollouts with minimal human involvement. Between rollouts, it will use an
-existing scene-reset method to restore a defined initial configuration, verify
-the resulting scene, and record the trial and its outcome.
+```text
+reset request + target configuration
+                ↓
+        observe physical scene
+                ↓
+        plan and execute reset
+                ↓
+        observe and verify result
+                ↓
+        reset outcome + measurements
+```
 
 ## Objectives
 
-The project will:
-
-1. Implement a DROID client that orchestrates policy rollouts on the real robot.
-2. Integrate an existing automatic scene-reset method between rollouts.
-3. Measure reset reliability and similarity to the intended initial state.
-4. Log observations, actions, timing, reset measurements, outcomes, failures,
-   and relevant configuration for every trial.
-5. Quantify how reset errors affect measured policy performance.
-6. Evaluate selected VLA models on a defined set of manipulation tasks.
-7. Compare automatic evaluation with manually conducted evaluation.
-
-The intended result is a system that enables larger and more reproducible
-real-world VLA evaluations. The same infrastructure may later support work on
-real-to-sim validation and real-world reinforcement-learning fine-tuning.
-
-## Planned evaluation loop
-
-```text
-validate system state
-        ↓
-reset physical scene
-        ↓
-measure and verify initial configuration
-        ↓
-run one VLA policy rollout
-        ↓
-determine and record the outcome
-        ↓
-store a complete trial record
-        ↓
-repeat or stop safely
-```
-
-Trials must retain failures and reset deviations rather than silently dropping
-them. Reproducibility requires distinguishing policy failures, reset failures,
-perception failures, operator interventions, and infrastructure failures.
-
-## System boundary
-
-The evaluation station will act as a **client** of the DROID control server:
-
-```text
-VLA policy / policy server
-            ↕
-DroidAuto evaluation client ── ZeroRPC ── DROID server on the NUC
-       ↕ cameras and logs                         ↕
- scene verification/reset                 Polymetis → Franka + gripper
-```
-
-The DROID server is the robot-control boundary; it is not itself a VLA policy
-server. Camera acquisition, policy interaction, evaluation orchestration,
-outcome measurement, and experiment logging belong on the client side. See
-[DROID server and client architecture](docs/DROID_SERVER.md) for the current
-interface and integration notes.
+1. Restore objects to a defined physical configuration.
+2. Integrate the supplied localization and existing robot-control stack.
+3. Measure reset reliability and final placement deviations.
+4. Preserve reset observations, actions, timing, outcomes and failures.
 
 ## Project layout
 
@@ -95,7 +50,7 @@ droidauto/
 │   │   └── io/              Station configuration and event logs
 │   ├── scene/              Shared physical and manipulation-object models
 │   └── buffer/             Gridfinity layout, fixtures and localization
-├── tests/                  Reserved; no project tests yet
+├── tests/                  Manual marker-pose camera diagnostic
 ├── scripts/                Reserved; no production entry points yet
 ├── experiments/            Independent perception utilities
 ├── configs/                Station examples; local settings ignored
@@ -180,8 +135,10 @@ python -m experiments.perception.browse_ycbv
 ```
 
 The exploratory buffer geometry/photo code lives under
-`experiments/buffer_geometry/`. `tests/` is empty; there is no project test suite
-yet. Fabrication sources remain under `openscad/gridfinity/aruko_square/`.
+`experiments/buffer_geometry/`. The [manual camera test](tests/README.md) uses
+the current camera object to outline markers and display camera-relative poses.
+There is no automated project test suite. Fabrication sources remain under
+`openscad/gridfinity/aruko_square/`.
 
 ## References
 

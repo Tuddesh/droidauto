@@ -47,5 +47,28 @@
         "size_mm": 32.0
       }
     ]
-  }
+  },
+  "objects": [
+    {
+      "type": "cube",
+      "object_id": "cube-1",
+      "dimensions_m": [
+        0.04,
+        0.04,
+        0.02
+      ],
+      "marker": {
+        "face": "top",
+        "id": null,
+        "size_m": 0.038,
+        "center_xy_m": [
+          0.0,
+          0.0
+        ],
+        "yaw_rad": null,
+        "family": "5x5",
+        "dictionary": null
+      }
+    }
+  ]
 }

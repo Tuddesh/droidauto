@@ -1,6 +1,6 @@
 # Reset framework
 
-This package prepares automatic scene restoration between policy rollouts.
+This package prepares automatic scene restoration to a requested configuration.
 Reset workflows remain explicit `NotImplementedError` placeholders.
 
 ## Core objects
@@ -28,7 +28,7 @@ backend/localizer protocols are deferred until an integration requires them.
 | --- | --- |
 | `hardware/` | Concrete DROID and ZED integrations. Controller startup belongs to `DroidRobot`. |
 | `calibration/` | Existing `BufferCalibration` and hand-eye estimation. |
-| `io/` | Existing `StationConfig`, `EventLog` and generic log-path naming. |
+| `io/` | `StationConfig`, one-time marker-binding persistence, `EventLog` and generic log-path naming. |
 
 Shared pose conversion/validation is in `scene.transforms`, alongside the
 [physical data models](../scene/README.md). Buffer localization remains owned

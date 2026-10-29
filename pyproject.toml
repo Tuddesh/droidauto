@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "droidauto"
 version = "0.1.0"
-description = "Automatic scene-reset and real-world VLA evaluation on DROID"
+description = "Automatic physical scene resetting on the DROID robot platform"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

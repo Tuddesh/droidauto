@@ -2,7 +2,7 @@
 
 `buffer/` models a rectangular Gridfinity buffer and estimates its pose from
 ArUco tiles installed in known cells. This is the first draft of the buffer
-side of the DroidAuto evaluation station.
+side of the DroidAuto scene-reset station.
 
 `Buffer` and `BufferItem` inherit the shared
 [`PhysicalObject` dataclass](../scene/README.md). Identity, dimensions, observed
