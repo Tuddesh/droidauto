@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import tempfile
 
+import cv2
 import numpy as np
 
 from buffer import Buffer
@@ -35,6 +36,22 @@ class StationConfig:
         self.layout = self.data["buffer"]
         self.camera = self.data.get("camera", {})
         self.layout.setdefault("marker_orientation", "independent")
+        # One detector per station, shared by buffer fits and scene observation.
+        self.aruco_dictionary_names = tuple(dict.fromkeys(
+            [self.layout["dictionary"]] + [
+                item["marker"]["dictionary"] for item in self.data.get("objects", [])
+                if item.get("marker", {}).get("dictionary") is not None
+            ]
+        ))
+        dictionaries = []
+        for name in self.aruco_dictionary_names:
+            if not hasattr(cv2.aruco, name):
+                raise ValueError(f"Unknown ArUco dictionary: {name}")
+            dictionaries.append(cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, name)))
+        parameters = cv2.aruco.DetectorParameters()
+        parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+        self.aruco_detector = cv2.aruco.ArucoDetector(dictionaries[0], parameters)
+        self.aruco_detector.setDictionaries(dictionaries)
         # Geometry and supplied-pose resets do not need a camera configuration.
         grid = self.make_buffer()
         ids = grid.marker_cells()
@@ -158,6 +175,12 @@ class StationConfig:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
         self.data["objects"] = data["objects"]
+        if dictionary not in self.aruco_dictionary_names:
+            self.aruco_detector.setDictionaries([
+                *self.aruco_detector.getDictionaries(),
+                cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, dictionary)),
+            ])
+            self.aruco_dictionary_names += (dictionary,)
 
     @property
     def layout_digest(self) -> str:
@@ -174,6 +197,7 @@ class StationConfig:
             dictionary=layout["dictionary"],
             marker_orientation=layout["marker_orientation"],
             object_id=layout.get("object_id"),
+            aruco_detector=self.aruco_detector,
         )
         for marker in layout["markers"]:
             grid.place(ArucoTile(marker["id"], marker["size_mm"], layout["dictionary"],

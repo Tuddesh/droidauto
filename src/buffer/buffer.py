@@ -44,6 +44,7 @@ class Buffer(PhysicalObject):
         marker_orientation: str = "aligned",
         *,
         object_id: str | None = None,
+        aruco_detector: cv2.aruco.ArucoDetector | None = None,
     ) -> None:
         if isinstance(columns, bool) or not isinstance(columns, int) or columns < 1:
             raise ValueError("columns must be a positive integer")
@@ -91,6 +92,18 @@ class Buffer(PhysicalObject):
         self._dictionary = cv2.aruco.getPredefinedDictionary(
             getattr(cv2.aruco, dictionary)
         )
+        if aruco_detector is None:
+            parameters = cv2.aruco.DetectorParameters()
+            parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+            aruco_detector = cv2.aruco.ArucoDetector(self._dictionary, parameters)
+        self.aruco_detector = aruco_detector
+        self._dictionary_index = next((
+            index for index, candidate in enumerate(aruco_detector.getDictionaries())
+            if candidate.markerSize == self._dictionary.markerSize
+            and np.array_equal(candidate.bytesList, self._dictionary.bytesList)
+        ), None)
+        if self._dictionary_index is None:
+            raise ValueError("The shared ArUco detector must include the buffer dictionary")
         self._cells: dict[tuple[int, int], BufferItem] = {}
         self._placed_object_ids: set[str] = set()
         self.last_localization: dict | None = None
@@ -185,10 +198,16 @@ class Buffer(PhysicalObject):
             raise LocalizationError("no ArUco tiles have been placed in the buffer")
 
         gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
-        parameters = cv2.aruco.DetectorParameters()
-        parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-        detector = cv2.aruco.ArucoDetector(self._dictionary, parameters)
-        detected_corners, detected_ids, _rejected = detector.detectMarkers(gray)
+        all_corners, all_ids, _rejected, dictionary_indices = (
+            self.aruco_detector.detectMarkersMultiDict(gray)
+        )
+        # Numeric IDs are only unique within a dictionary: cube ID 0 is not
+        # buffer ID 0. Keep only this buffer's dictionary for pose fitting.
+        selected = (np.asarray(dictionary_indices).reshape(-1) == self._dictionary_index
+                    if all_ids is not None else np.zeros(0, dtype=bool))
+        detected_corners = [corner for corner, keep in zip(all_corners, selected) if keep]
+        detected_ids = (np.asarray(all_ids).reshape(-1, 1)[selected]
+                        if np.any(selected) else None)
         self.last_detection = {
             "ids": [] if detected_ids is None else np.asarray(detected_ids).reshape(-1).tolist(),
             "corners": [np.asarray(corner).copy() for corner in detected_corners],

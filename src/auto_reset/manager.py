@@ -19,6 +19,7 @@ import time
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
+import cv2
 import numpy as np
 
 from scene import SceneObject
@@ -54,6 +55,7 @@ class ResetManager:
     position_tolerance_m: float = 0.01
     orientation_tolerance_rad: float = 0.1
     motion_timeout_s: float = 60.0
+    aruco_detector: cv2.aruco.ArucoDetector = field(init=False, repr=False)
     _state: dict[str, object] = field(default_factory=lambda: {
         "phase": "idle", "current_action": None, "success": None,
         "scene_before": None, "scene_after": None,
@@ -63,6 +65,8 @@ class ResetManager:
     _run_lock: Lock = field(default_factory=Lock, init=False, repr=False)
 
     def __post_init__(self):
+        # Available to observe() for object detection as well as buffer scans.
+        self.aruco_detector = self.buffer.aruco_detector
         for value in (self.position_tolerance_m, self.orientation_tolerance_rad, self.motion_timeout_s):
             if not math.isfinite(value) or value <= 0:
                 raise ValueError("Verification tolerances and motion timeout must be positive")

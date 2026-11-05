@@ -7,7 +7,7 @@ dependencies:
   - tk
   - numpy>=2,<3
   - scipy>=1.14,<2
-  - opencv>=4.10,<5
+  - opencv>=4.13,<5
   - matplotlib
   - pillow
   - pip
