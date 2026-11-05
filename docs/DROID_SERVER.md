@@ -65,8 +65,7 @@ manual-capture age/stationarity gates; the operator establishes stationarity.
 The backend validates the list's shape/numeric values and does not maintain a
 copied table of robot joint limits.
 
-Cartesian targets are clipped so the gripping point stays at base Z >= -0.009 m
-(10 mm above the table at base Z = -0.019 m),
+Cartesian targets are clipped so the gripping point stays at base Z >= -0.028 m,
 including its measured 172 mm flange offset. Clipping emits a warning and reset
 logs record the applied endpoint. XY and orientation are preserved. This limits
 endpoints; joint-space paths and arbitrary direct joint commands are not constrained.
