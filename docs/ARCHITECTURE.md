@@ -9,13 +9,13 @@ and `buffer` live directly under `src/`. The application entry point is
 | Area | Current state |
 | --- | --- |
 | Physical data | Identity, dimensions, copied observed poses, named frames and timestamps. |
-| Cube | 40 x 40 x 20 mm, centered 38 mm top marker, DICT_ARUCO_ORIGINAL ID 13 in station config. |
+| Cube | 40 x 40 x 20 mm, centered 38 mm top marker, DICT_ARUCO_ORIGINAL ID 27, aligned marker/cube edges. |
 | Grasp geometry | Explicit object/tool transforms or a downward top grasp from a measured tool offset. |
 | Targets | Buffer-relative poses and one-cell placements using object dimensions and a supplied floor height. |
 | Planning | Simple pick/place endpoint sequence; no collision-aware path planner or grasp search. |
 | Execution | DROID arm/gripper commands, joint-velocity settling, cooperative cancellation and failure logging. |
 | Verification | Final supplied observations compared with targets; result retained in manager state. |
-| Localization | Object poses are supplied; the existing Buffer detector captures/caches the fixed buffer pose. |
+| Localization | Shared ArUco detector; cube poses fitted from one/stereo images or supplied; fixed buffer pose captured/cached. |
 | Existing utilities | Buffer ArUco/stereo localization, hand-eye/buffer calibration and independent ZED acquisition. |
 | Startup | JSON document/JSON-lines requests; optional DROID connection and explicit controller initialization. |
 | Container | Headless Python runtime; DROID is external, camera SDK is not included. |
@@ -35,7 +35,7 @@ ResetManager
 ├── TargetConfiguration
 ├── ResetPlanner
 ├── DroidRobot (tool-state read for capture; motion only for execution)
-├── ZedWristCamera and StationConfig (buffer acquisition)
+├── ZedWristCamera and StationConfig (buffer and object acquisition)
 ├── BufferCalibration (optional saved buffer pose)
 └── EventLog (optional)
 ```
@@ -45,7 +45,8 @@ fixtures and its independent localization methods. Desired placements belong
 to `TargetConfiguration`, separately from measured poses. `ResetPlanner`
 composes grasp/endpoints; `DroidRobot` delegates IK and robot control to DROID.
 The manager owns sequencing, final verification and outcome state. No separate
-reset-result object, driver protocol hierarchy or object-localizer adapter is needed.
+reset-result object or driver protocol hierarchy is needed. The `localize_cubes`
+image adapter handles marker fitting and diagnostics without owning hardware.
 
 ## Frames
 
@@ -59,13 +60,14 @@ object height above the explicitly supplied buffer support plane.
 Pure marker-to-cube geometry remains available on `Cube`; a marker center is
 10 mm outward from the block center along its local top normal. Full edge-aligned
 orientation additionally needs known marker mounting yaw. Object-marker
-detection and preview are outside the reset runtime; buffer markers are detected
-by the existing Buffer methods.
+detection uses the shared detector through `ResetManager.observe(detect_objects=True)`;
+buffer poses remain fitted by the existing Buffer methods. Cube pose fitting
+jointly minimizes corner reprojection error over the available stereo eyes.
 
 ## Reset lifecycle
 
 ```text
-supplied object poses + detected/cached buffer → planning → executing → awaiting_verification
+camera/supplied object poses + detected/cached buffer → planning → executing → awaiting_verification
                                          ↓ supplied final measurements
                                       completed (success true/false)
 ```

@@ -1,8 +1,8 @@
-"""Reset orchestration, supplied observations and manager-owned outcome state.
+"""Reset orchestration, camera/supplied observations and internal outcome state.
 
-Callers supply object poses; existing Buffer localization supplies the buffer
-pose using a stationary camera capture. That fixed pose is cached until an
-explicit rescan. Callers later submit final measurements for verification.
+Object poses come from camera marker observations or the caller. Existing
+Buffer localization supplies the fixed buffer pose, cached until a rescan.
+Callers later submit final measurements for verification.
 Execution delegates each
 endpoint/gripper command to DROID; no positional-error gating or interpolation
 is inserted. Cancellation takes effect between blocking commands.
@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import math
 from threading import Event, Lock
 import time
@@ -23,7 +24,7 @@ import cv2
 import numpy as np
 
 from scene import SceneObject
-from scene.transforms import pose_error, transform
+from scene.transforms import pose_error, pose_to_transform, transform
 from .planner import ResetPlan, ResetPlanner
 from .target_configuration import TargetConfiguration
 from .hardware.droid import DroidRobot
@@ -102,14 +103,27 @@ class ResetManager:
         del self.objects[object_id]
 
     def observe(self, observations: Mapping[str, np.ndarray] | None = None, *,
-                timestamp: float | None = None, detect_buffer: bool = False) -> dict:
-        """Accept object poses and detect the buffer once, or explicitly rescan it.
+                timestamp: float | None = None, detect_buffer: bool = False,
+                detect_objects: bool = False) -> dict:
+        """Accept supplied poses or capture cube markers with the shared detector.
 
         In an explicit observation batch, omitted task objects become unobserved.
         The buffer is detected through the existing calibration capture utility;
         its actual pose fitting stays in Buffer.localize()/localize_stereo().
         Calling without arguments returns the current snapshot without capture.
+        detect_objects=True captures current cube poses; missing cubes become
+        unobserved. Scan diagnostics are retained in state['last_observation'].
         """
+        if detect_objects and observations is not None:
+            raise ValueError("Choose camera object detection or supplied object poses")
+        if detect_objects:
+            if self._state["phase"] in ("planning", "executing"):
+                raise RuntimeError("Cannot replace observations during reset execution")
+            if self.camera is None or self.robot is None or self.station_config is None:
+                raise ValueError("Object detection needs the station camera, robot connection and configuration")
+            for obj in self.objects.values():
+                obj.mark_unobserved()
+            self._state.pop("last_observation", None)
         checked = {}
         if observations is not None:
             if self._state["phase"] in ("planning", "executing"):
@@ -123,7 +137,7 @@ class ResetManager:
             if unknown:
                 raise KeyError(f"Unknown observed object(s): {sorted(unknown)}")
             checked = {key: transform(value) for key, value in observations.items()}
-        if detect_buffer or (observations is not None and self.buffer.pose is None):
+        if detect_buffer or ((observations is not None or detect_objects) and self.buffer.pose is None):
             if self._state["phase"] == "executing":
                 raise RuntimeError("Cannot rescan the buffer during execution")
             if self.camera is None or self.robot is None or self.station_config is None:
@@ -147,13 +161,60 @@ class ResetManager:
             self._record("buffer_detected", pose=calibration.base_buffer.tolist(),
                          quality=calibration.record["quality"], calibration_file=str(path))
             print(f"Buffer detected; calibration and source image saved to {path}", flush=True)
+        if detect_objects:
+            from .calibration.buffer import load_hand_eye
+            from .localization import localize_cubes
+
+            config = self.station_config
+            self._record("object_detection_started")
+            try:
+                with self.camera as camera:
+                    camera.set_auto_exposure_roi(config.camera.get("auto_exposure_roi"))
+                    while True:
+                        self.robot.read_state()
+                        frames = camera.capture_pair() if camera.view == "stereo" else [camera.capture()]
+                        if not frames or any(frame.serial != str(config.camera["serial"]) for frame in frames):
+                            raise ValueError("Object scan does not match the configured camera")
+                        base_tool = self.robot.read_state().tool_pose
+                        if "tool_left_camera_pose" in config.camera:
+                            tool_left = pose_to_transform(config.camera["tool_left_camera_pose"])
+                        elif self.calibration is not None and "tool_left_camera" in self.calibration.record:
+                            tool_left = transform(self.calibration.record["tool_left_camera"])
+                        else:
+                            try:
+                                tool_left = load_hand_eye(config.resolve(config.camera["hand_eye_file"]),
+                                                          frames[0].serial, "left")
+                            except (ValueError, OSError, KeyError):
+                                right = next((frame for frame in frames if frame.view == "right"), None)
+                                if right is None or right.left_camera_eye is None:
+                                    raise
+                                tool_right = load_hand_eye(config.resolve(config.camera["hand_eye_file"]),
+                                                           right.serial, "right")
+                                tool_left = tool_right @ np.linalg.inv(transform(right.left_camera_eye))
+                        directory = (config.resolve(config.data["log_directory"]) / "object_scans" /
+                                     datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ"))
+                        observations, report = localize_cubes(
+                            frames, self.aruco_detector, config.aruco_dictionary_names,
+                            self.objects, base_tool @ tool_left, directory,
+                            review=config.camera.get("review_capture", False),
+                        )
+                        self._state["last_observation"] = report
+                        self._record("objects_detected", **report)
+                        if observations is not None:
+                            timestamp = time.time()
+                            checked = {key: transform(value) for key, value in observations.items()}
+                            break
+            except (Exception, KeyboardInterrupt) as exc:
+                self._record("object_detection_failed", reason=str(exc) or type(exc).__name__)
+                raise
         if observations is not None:
             for key, scene_object in self.objects.items():
                 if key not in checked:
                     scene_object.mark_unobserved()
             for key, pose in checked.items():
                 self.objects[key].update_pose(pose, "base", timestamp)
-            self._record("observations_supplied", object_ids=list(checked), timestamp_s=timestamp)
+            self._record("observations_captured" if detect_objects else "observations_supplied",
+                         object_ids=list(checked), timestamp_s=timestamp)
         return {key: {"pose": None if obj.pose is None else obj.pose.tolist(),
                       "pose_frame": obj.pose_frame, "observed_at": obj.observed_at}
                 for key, obj in {self.buffer.object_id: self.buffer, **self.objects}.items()}

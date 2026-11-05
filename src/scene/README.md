@@ -25,7 +25,8 @@ frame reported by DROID, not an assumed fingertip frame.
 The block is **40 x 40 x 20 mm**, with a centered **38 mm** marker on top.
 Its origin is the geometric center, X/Y follow its base edges, and +Z points
 out of the top face. The marker plane is at Z=+10 mm. The station example
-records **DICT_ARUCO_ORIGINAL, ID 13**. No image detection is implemented here.
+records **DICT_ARUCO_ORIGINAL, ID 27**, with marker/cube edges aligned. Image
+detection belongs to the reset framework's localization adapter.
 
 ```python
 from scene import Cube

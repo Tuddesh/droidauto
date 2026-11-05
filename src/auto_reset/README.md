@@ -1,8 +1,8 @@
 # Reset framework
 
-The framework accepts supplied base-frame observations and executes a simple
-cube pick-and-place through DROID. The buffer is detected using its existing
-camera/stereo localization; object detection remains external.
+The framework accepts camera or supplied base-frame observations and executes
+a simple cube pick-and-place through DROID. Buffer localization and cube
+observation use the station's shared multi-dictionary ArUco detector.
 
 ## Objects and ownership
 
@@ -60,6 +60,16 @@ retained. `observe(detect_buffer=True)` explicitly rescans. Capture uses the
 existing Buffer detector, saves the calibration/source image, and releases the
 camera. Calling `observe()` without arguments returns a snapshot.
 
+`observe(detect_objects=True)` captures the configured cube markers and converts
+their poses through the measured camera mount into robot-base cube-center poses.
+Both eyes contribute to one joint reprojection fit when visible. One eye also
+works. Marker ID/dictionary and mounting yaw must match the cube configuration.
+Missing or ambiguous markers clear the object's previous pose. Frozen inputs,
+overlays and evaluation JSON are saved under `runs/reset/object_scans/`; interactive
+review supports accept, retake, print and cancel. `state['last_observation']`
+contains detections, fitted poses, errors and image paths. `detect_buffer=True`
+can be combined with object detection to refresh the buffer too.
+
 `manager.plan(target, current_tool_pose=...)` is offline; omit the tool pose to
 read it from a connected robot. `manager.reset(target)` reads the actual tool
 pose, plans before sending commands, logs each action and invalidates moved
@@ -70,8 +80,8 @@ in metres and orientation error in radians against the requested placements.
 These tolerances assess the final reset result; they do not gate intermediate
 motion. Missing objects fail verification. The buffer is treated as fixed until
 an explicit rescan.
-Verification is optional while object detection is deferred: another reset may use
-new supplied pickup poses, leaving the preceding result unverified in the log.
+Verification is optional: another reset may use fresh pickup observations,
+leaving the preceding result unverified in the log.
 Any moved, failed or cancelled transfer requires fresh poses before replanning.
 
 ## JSON request entry point
@@ -86,6 +96,9 @@ Poses may be rigid 4x4 matrices or `[x,y,z,roll,pitch,yaw]` with metres and
 fixed-axis XYZ radians. Object observation poses are base-relative; target poses are
 buffer-relative. The buffer is detected once or loaded from calibration.
 `--scan-buffer` forces a stationary recapture; `--dummy` supplies only object poses. `timestamp_s` optionally records supplied observation time.
+`--detect-objects` instead uses camera cube poses and the example buffer target;
+it plans unless `--execute` is also present. `--review-buffer` enables frozen
+review for both buffer and cube scans; `--no-review` disables interactive review.
 
 Example request shapes (poses here are illustrative):
 
@@ -100,7 +113,10 @@ Example request shapes (poses here are illustrative):
 A target may instead be `{"pose": [x,y,z,roll,pitch,yaw]}`. A plan/reset
 request may include an `observations` batch. A `plan` request never moves the
 robot; without a supplied starting tool pose, it needs a robot state connection.
-An `observe` request without an observation batch rescans the buffer.
+An `observe` request without a batch captures cube poses and uses the cached
+buffer; include `"detect_buffer": true` to rescan it. Its response includes the
+observed poses. Plan/reset requests can include `"detect_objects": true` instead
+of an `observations` batch.
 The default operation is `plan`. Errors are returned with manager state and log
 path; one-shot errors exit nonzero. In streaming mode subsequent requests can
 correct input or provide new measurements. Verification must use actual final

@@ -59,13 +59,13 @@
       ],
       "marker": {
         "face": "top",
-        "id": 13,
+        "id": 27,
         "size_m": 0.038,
         "center_xy_m": [
           0.0,
           0.0
         ],
-        "yaw_rad": null,
+        "yaw_rad": 0.0,
         "family": "5x5",
         "dictionary": "DICT_ARUCO_ORIGINAL"
       },

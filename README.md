@@ -1,19 +1,19 @@
 # DroidAuto — automatic scene resetting on DROID
 
-DroidAuto implements a reset operation: accept supplied scene poses and a target
+DroidAuto implements a reset operation: observe the scene and accept a target
 configuration, plan object transfers, execute them through DROID, and verify
 placements from separately supplied final measurements. VLA execution and
 model evaluation orchestration are outside this project's implementation scope.
 
-Object detection is deferred. Object poses are supplied in the robot base
-frame. The existing buffer detector captures the stationary buffer once and
-saves its pose and source image; subsequent resets reuse that fixed pose.
+Cube poses come from camera ArUco detection or supplied robot-base coordinates.
+The existing buffer detector captures the stationary buffer once and saves its
+pose and source image; subsequent resets reuse that fixed pose.
 
 ## Current behavior
 
 - Cube: **40 x 40 x 20 mm**, centered **38 mm** top marker,
-  **DICT_ARUCO_ORIGINAL / ID 13**. Origin is the geometric center.
-- Object observations are supplied in the **robot base frame**; the buffer is detected.
+  **DICT_ARUCO_ORIGINAL / ID 27**, aligned with the cube edges. Origin is the geometric center.
+- Camera and supplied object observations use the **robot base frame**; the buffer is detected.
 - Targets are object poses in **buffer coordinates**, or free buffer cells with
   an explicit support-plane height.
 - Configured grasps are **T_object_tool**, using DROID's actual reported tool
@@ -91,6 +91,9 @@ python -m auto_reset --config configs/station.local.json --request configs/reset
 `python -m auto_reset --dummy` supplies only example object coordinates and
 plans using the detected/cached buffer. Add `--scan-buffer` for a fresh capture
 and `--execute` to perform the transfer.
+
+`python -m auto_reset --detect-objects --review-buffer` instead detects the real
+cube, shows frozen scan images and plans its transfer. Add `--execute` to move.
 
 For persistent manager state, omit `--request` and send one JSON request per
 stdin line. `--execute` enables the robot connection and `reset` requests:
