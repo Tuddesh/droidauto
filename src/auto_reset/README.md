@@ -1,7 +1,8 @@
 # Reset framework
 
 The framework accepts supplied base-frame observations and executes a simple
-cube pick-and-place through DROID. Image localization is not integrated.
+cube pick-and-place through DROID. The buffer is detected using its existing
+camera/stereo localization; object detection remains external.
 
 ## Objects and ownership
 
@@ -15,7 +16,8 @@ cube pick-and-place through DROID. Image localization is not integrated.
 | `EventLog` | Flushed JSONL event records, including failures. |
 
 The manager references a buffer, robot, planner, registered scene objects and
-optional event log. It has no camera/localizer dependency. `manager.state`
+optional event log, plus camera/station configuration for buffer acquisition.
+A saved BufferCalibration supplies the fixed pose without another capture. `manager.state`
 returns a detached snapshot of phase, current action, success, scene-before/
 after, placement errors, failure reason and timing. There is no result object.
 
@@ -51,10 +53,12 @@ An interrupted transfer performs no automatic gripper opening or recovery.
 
 ## Supplied observations and verification
 
-`manager.observe({object_id: T_base_object, ...})` accepts measured poses.
-Omitted task objects become unobserved; the fixed buffer pose is retained if
-not included. All matrices are copied and validated before updating a batch.
-Calling `observe()` without arguments returns a scene snapshot.
+`manager.observe({object_id: T_base_object, ...})` accepts task-object poses
+and detects the buffer if it has no known pose. Supplied buffer poses are
+rejected. Omitted task objects become unobserved; the fixed buffer pose is
+retained. `observe(detect_buffer=True)` explicitly rescans. Capture uses the
+existing Buffer detector, saves the calibration/source image, and releases the
+camera. Calling `observe()` without arguments returns a snapshot.
 
 `manager.plan(target, current_tool_pose=...)` is offline; omit the tool pose to
 read it from a connected robot. `manager.reset(target)` reads the actual tool
@@ -64,9 +68,9 @@ objects' previous poses. It finishes at `awaiting_verification`, success unknown
 `manager.verify({object_id: measured_final_pose, ...})` computes position error
 in metres and orientation error in radians against the requested placements.
 These tolerances assess the final reset result; they do not gate intermediate
-motion. Missing objects fail verification. Replacing the fixed buffer pose in
-the final batch permits comparison relative to the latest supplied buffer pose.
-Verification is optional while localization is deferred: another reset may use
+motion. Missing objects fail verification. The buffer is treated as fixed until
+an explicit rescan.
+Verification is optional while object detection is deferred: another reset may use
 new supplied pickup poses, leaving the preceding result unverified in the log.
 Any moved, failed or cancelled transfer requires fresh poses before replanning.
 
@@ -74,18 +78,19 @@ Any moved, failed or cancelled transfer requires fresh poses before replanning.
 
 Run `python -m auto_reset --config CONFIG`. Each stdin line is one JSON
 request; each stdout line is one JSON response. The process retains manager
-state. `--request FILE` instead runs one JSON document and exits. The default
-has no robot connection; `--execute` enables reset execution. Controller
+state. `--request FILE` instead runs one JSON document and exits. A robot
+connection supplies the tool pose for capture; `--execute` enables reset motion. Controller
 relaunch requires the separate `--initialize-controllers` flag.
 
 Poses may be rigid 4x4 matrices or `[x,y,z,roll,pitch,yaw]` with metres and
-fixed-axis XYZ radians. Observation poses are base-relative; target poses are
-buffer-relative. `timestamp_s` optionally records supplied observation time.
+fixed-axis XYZ radians. Object observation poses are base-relative; target poses are
+buffer-relative. The buffer is detected once or loaded from calibration.
+`--scan-buffer` forces a stationary recapture; `--dummy` supplies only object poses. `timestamp_s` optionally records supplied observation time.
 
 Example request shapes (poses here are illustrative):
 
 ```json
-{"operation":"observe","observations":{"buffer-main":[0.4,-0.15,0.05,0,0,0],"cube-1":[0.45,0.15,0.06,0,0,0]}}
+{"operation":"observe","observations":{"cube-1":[0.45,0.15,0.06,0,0,0]}}
 {"operation":"plan","current_tool_pose":[0.4,0,0.4,3.141592653589793,0,0],"targets":{"cube-1":{"cell":[2,2],"support_height_m":0.0,"yaw_rad":0.0}}}
 {"operation":"reset","targets":{"cube-1":{"cell":[2,2],"support_height_m":0.0}}}
 {"operation":"verify","observations":{"cube-1":[0.505,-0.045,0.06,0,0,0]}}
@@ -95,6 +100,7 @@ Example request shapes (poses here are illustrative):
 A target may instead be `{"pose": [x,y,z,roll,pitch,yaw]}`. A plan/reset
 request may include an `observations` batch. A `plan` request never moves the
 robot; without a supplied starting tool pose, it needs a robot state connection.
+An `observe` request without an observation batch rescans the buffer.
 The default operation is `plan`. Errors are returned with manager state and log
 path; one-shot errors exit nonzero. In streaming mode subsequent requests can
 correct input or provide new measurements. Verification must use actual final

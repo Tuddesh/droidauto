@@ -1,0 +1,51 @@
+--- a/droid/fairo/polymetis/polymetis/python/polymetis/robot_client/robotiq_gripper/robotiq_gripper_client.py
++++ b/droid/fairo/polymetis/polymetis/python/polymetis/robot_client/robotiq_gripper/robotiq_gripper_client.py
+@@ -47,14 +47,16 @@
+         time.sleep(1)
+         self.gripper.activate_gripper()
+         self.gripper.sendCommand()
+-        if (
+-            self.gripper.is_ready()
+-            and self.gripper.sendCommand()
+-            and self.gripper.getStatus()
+-        ):
+-            print("Activated.")
++        # is_ready() reads cached status. Refresh it after activation and
++        # allow the hardware transition to complete before registering metadata.
++        activation_deadline = time.monotonic() + 10.0
++        while time.monotonic() < activation_deadline:
++            if self.gripper.getStatus() and self.gripper.is_ready():
++                print("Activated.")
++                break
++            time.sleep(0.05)
+         else:
+-            raise Exception(f"Unable to activate!")
++            raise RuntimeError("Robotiq did not report ready within 10 seconds of activation")
+ 
+         # Connect to server
+         self.channel = grpc.insecure_channel(f"{server_ip}:{server_port}")
+@@ -66,6 +68,7 @@
+         metadata.hz = self.hz
+         metadata.max_width = self.gripper.stroke
+ 
++        grpc.channel_ready_future(self.channel).result(timeout=10.0)
+         self.connection.InitRobotClient(metadata)
+ 
+     def get_gripper_state(self):
+--- a/droid/fairo/polymetis/polymetis/python/polymetis/gripper_interface.py
++++ b/droid/fairo/polymetis/polymetis/python/polymetis/gripper_interface.py
+@@ -31,10 +31,10 @@
+         self.grpc_connection = polymetis_pb2_grpc.GripperServerStub(self.channel)
+ 
+         # Get metadata
+-        try:
+-            self.metadata = self.grpc_connection.GetRobotClientMetadata(EMPTY)
+-        except grpc.RpcError:
+-            log.warning("Metadata unavailable from server.")
++        # A failed metadata request must fail construction, before creating
++        # a command worker. Returning without metadata leaves a broken interface
++        # and leaks a worker thread on every subsequent attachment attempt.
++        self.metadata = self.grpc_connection.GetRobotClientMetadata(EMPTY)
+ 
+         # Execute commands from cache in separate thread
+         self._command_thr = threading.Thread(

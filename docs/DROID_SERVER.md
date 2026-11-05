@@ -38,8 +38,16 @@ The backend provides:
   `wait_until_stopped()`.
 
 Opening the RPC connection does not initialize controllers or move the robot.
-`initialize()` calls `launch_controller()` followed by `launch_robot()`, with
-up to five full-pair retries on remote errors. Startup is an explicit action.
+`initialize()` launches controllers once, then attaches interfaces with a
+30-second readiness timeout. It recognizes transient arm gRPC failures and the
+known missing-gripper-metadata constructor failure. Unrelated errors propagate.
+Startup remains explicit; controller restarts are not repeated automatically.
+
+The Robotiq driver must refresh status after requesting activation. The patch
+`patches/robotiq-activation-status.patch` fixes that check in the existing server
+driver constructor and waits for its gRPC connection before publishing metadata.
+Apply it from the DROID checkout root with `git apply /path/to/patch`; it is
+prepared for review and has not been applied to the NUC.
 The RPC client uses a 60-second timeout and a 20-second heartbeat.
 
 `RobotState` contains the measured tool transform, seven joint positions,
@@ -61,6 +69,11 @@ manual-capture age/stationarity gates; the operator establishes stationarity.
 `command_joints()` sends one `update_joints(joints, False, blocking)` request.
 The backend validates the list's shape/numeric values and does not maintain a
 copied table of robot joint limits.
+
+Cartesian targets are clipped so the gripping point stays at base Z >= 0.01 m,
+including its measured 172 mm flange offset. Clipping emits a warning and reset
+logs record the applied endpoint. XY and orientation are preserved. This limits
+endpoints; joint-space paths and arbitrary direct joint commands are not constrained.
 
 For a blocking Cartesian endpoint, `command_pose()` uses the server's
 `add_noise_to_joints(seed, delta)` endpoint-IK helper, then calls blocking
@@ -97,8 +110,8 @@ comparing the tool pose to the requested endpoint. Gripper methods call
 
 `src/auto_reset/hardware/zed.py` provides `ZedWristCamera` and `CameraFrame`.
 It captures rectified left/right images at HD2K (2208 x 1242 per eye) and
-15 FPS with matching intrinsics. The reset runner does not open this camera;
-localization is deferred and observations are supplied directly. Stereo eyes
+15 FPS with matching intrinsics. The reset manager opens it for initial buffer
+detection or an explicit rescan. Object poses are supplied directly. Stereo eyes
 share one SDK grab and timestamp. The SDK rectified stereo transform supplies
 the right optical frame relative to the left in IMAGE coordinates/metres.
 

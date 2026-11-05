@@ -1,7 +1,9 @@
 """Reset orchestration, supplied observations and manager-owned outcome state.
 
-No localization runs here. Callers supply base-frame poses, request a reset and
-later submit final measurements for verification. Execution delegates each
+Callers supply object poses; existing Buffer localization supplies the buffer
+pose using a stationary camera capture. That fixed pose is cached until an
+explicit rescan. Callers later submit final measurements for verification.
+Execution delegates each
 endpoint/gripper command to DROID; no positional-error gating or interpolation
 is inserted. Cancellation takes effect between blocking commands.
 """
@@ -23,11 +25,13 @@ from scene import SceneObject
 from scene.transforms import pose_error, transform
 from .planner import ResetPlan, ResetPlanner
 from .target_configuration import TargetConfiguration
+from .hardware.droid import DroidRobot
 
 if TYPE_CHECKING:
     from buffer import Buffer
-    from .hardware import DroidRobot
-    from .io import EventLog
+    from .hardware import ZedWristCamera
+    from .io import EventLog, StationConfig
+    from .calibration import BufferCalibration
 
 
 class ResetCancelled(RuntimeError):
@@ -36,11 +40,14 @@ class ResetCancelled(RuntimeError):
 
 @dataclass(kw_only=True, eq=False)
 class ResetManager:
-    """Own reset execution and results; observations are supplied explicitly."""
+    """Own resets using supplied object poses and a detected fixed buffer pose."""
 
     buffer: Buffer
     robot: DroidRobot | None
     planner: ResetPlanner
+    camera: ZedWristCamera | None = None
+    station_config: StationConfig | None = None
+    calibration: BufferCalibration | None = None
     log: EventLog | None = None
     objects: dict[str, SceneObject] = field(default_factory=dict)
     target_configuration: TargetConfiguration | None = None
@@ -63,6 +70,11 @@ class ResetManager:
         self.objects = {}
         for scene_object in initial.values():
             self.register_object(scene_object)
+        if self.calibration is not None:
+            if self.station_config is not None:
+                self.calibration.check_config(self.station_config)
+            self.buffer.update_pose(self.calibration.base_buffer, "base",
+                                    self.calibration.record["created_at_s"])
 
     @property
     def state(self) -> Mapping[str, object]:
@@ -86,29 +98,56 @@ class ResetManager:
         del self.objects[object_id]
 
     def observe(self, observations: Mapping[str, np.ndarray] | None = None, *,
-                timestamp: float | None = None) -> dict:
-        """Accept T_base_object measurements or return the current scene snapshot.
+                timestamp: float | None = None, detect_buffer: bool = False) -> dict:
+        """Accept object poses and detect the buffer once, or explicitly rescan it.
 
         In an explicit observation batch, omitted task objects become unobserved.
-        The fixed buffer pose is retained unless a replacement is supplied.
-        There are no camera, localizer or robot-state calls in this method.
+        The buffer is detected through the existing calibration capture utility;
+        its actual pose fitting stays in Buffer.localize()/localize_stereo().
+        Calling without arguments returns the current snapshot without capture.
         """
+        checked = {}
         if observations is not None:
             if self._state["phase"] in ("planning", "executing"):
                 raise RuntimeError("Cannot replace observations during reset execution")
             timestamp = time.time() if timestamp is None else float(timestamp)
             if not math.isfinite(timestamp):
                 raise ValueError("Observation timestamp must be finite")
-            entities = {self.buffer.object_id: self.buffer, **self.objects}
-            unknown = set(observations) - entities.keys()
+            if self.buffer.object_id in observations:
+                raise ValueError("Supply object poses only; the buffer pose comes from camera detection")
+            unknown = set(observations) - self.objects.keys()
             if unknown:
                 raise KeyError(f"Unknown observed object(s): {sorted(unknown)}")
             checked = {key: transform(value) for key, value in observations.items()}
+        if detect_buffer or (observations is not None and self.buffer.pose is None):
+            if self._state["phase"] == "executing":
+                raise RuntimeError("Cannot rescan the buffer during execution")
+            if self.camera is None or self.robot is None or self.station_config is None:
+                raise ValueError("Buffer detection needs the station camera, robot connection and configuration")
+            from .calibration.buffer import capture_calibration
+
+            self.buffer.mark_unobserved()
+            self.calibration = None
+            self._record("buffer_detection_started")
+            # Automatic base-frame composition needs live feedback around the
+            # capture; a frozen pre-stop pose must not become a new calibration.
+            self.robot.read_state()
+            with self.camera as camera:
+                calibration = capture_calibration(self.station_config, self.robot, camera)
+            self.robot.read_state()
+            path = self.station_config.resolve(self.station_config.data["calibration_file"])
+            calibration.save(path)
+            self.buffer.update_pose(calibration.base_buffer, "base", calibration.record["created_at_s"])
+            self.calibration = calibration
+            self._record("buffer_detected", pose=calibration.base_buffer.tolist(),
+                         quality=calibration.record["quality"], calibration_file=str(path))
+            print(f"Buffer detected; calibration and source image saved to {path}", flush=True)
+        if observations is not None:
             for key, scene_object in self.objects.items():
                 if key not in checked:
                     scene_object.mark_unobserved()
             for key, pose in checked.items():
-                entities[key].update_pose(pose, "base", timestamp)
+                self.objects[key].update_pose(pose, "base", timestamp)
             self._record("observations_supplied", object_ids=list(checked), timestamp_s=timestamp)
         return {key: {"pose": None if obj.pose is None else obj.pose.tolist(),
                       "pose_frame": obj.pose_frame, "observed_at": obj.observed_at}
@@ -121,14 +160,25 @@ class ResetManager:
             raise ValueError("Target configuration belongs to a different buffer")
         if not target_configuration.poses:
             raise ValueError("A reset request needs at least one target")
+        if self.buffer.pose is None:
+            self.observe(detect_buffer=True)
         if self.buffer.pose is None or self.buffer.pose_frame != "base":
-            raise ValueError("Buffer needs a supplied base-frame pose")
+            raise ValueError("Buffer detection did not establish its base-frame pose")
         if current_tool_pose is None:
             if self.robot is None:
                 raise ValueError("Offline planning needs current_tool_pose")
             current_tool_pose = self.robot.read_state().tool_pose
-        return self.planner.plan(self.objects, target_configuration,
-                                 buffer_pose=self.buffer.pose, current_tool_pose=current_tool_pose)
+        actions = self.planner.plan(self.objects, target_configuration,
+                                    buffer_pose=self.buffer.pose, current_tool_pose=current_tool_pose)
+        for action in actions:
+            if action["type"] == "move":
+                requested = transform(action["pose"])
+                clipped = DroidRobot._clip_cartesian_target(requested)
+                if not np.array_equal(requested, clipped):
+                    self._record("target_clipped", name=action["name"], object_id=action["object_id"],
+                                 requested_pose=requested.tolist(), applied_pose=clipped.tolist())
+                action["pose"] = clipped.tolist()
+        return actions
 
     def reset(self, target_configuration: TargetConfiguration) -> None:
         """Plan/execute once; retain unknown success until final poses are verified."""

@@ -1,14 +1,6 @@
 {
   "operation": "plan",
   "observations": {
-    "buffer-main": [
-      0.4,
-      -0.15,
-      0.05,
-      0,
-      0,
-      0
-    ],
     "cube-1": [
       0.45,
       0.15,

@@ -1,6 +1,6 @@
 """Core reset objects; supporting hardware, calibration and I/O live in packages.
 
-Poses are supplied externally; imports perform no hardware initialization.
+Object poses are supplied externally; imports perform no hardware initialization.
 The command-line/container entry point is available via python -m auto_reset.
 """
 

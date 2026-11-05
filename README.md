@@ -5,15 +5,15 @@ configuration, plan object transfers, execute them through DROID, and verify
 placements from separately supplied final measurements. VLA execution and
 model evaluation orchestration are outside this project's implementation scope.
 
-Image localization is deferred. The runtime does not open a camera or detect
-markers. Existing buffer localization/calibration utilities remain available
-independently. Cube geometry and marker metadata are retained.
+Object detection is deferred. Object poses are supplied in the robot base
+frame. The existing buffer detector captures the stationary buffer once and
+saves its pose and source image; subsequent resets reuse that fixed pose.
 
 ## Current behavior
 
 - Cube: **40 x 40 x 20 mm**, centered **38 mm** top marker,
   **DICT_ARUCO_ORIGINAL / ID 13**. Origin is the geometric center.
-- Scene observations are supplied in the **robot base frame**.
+- Object observations are supplied in the **robot base frame**; the buffer is detected.
 - Targets are object poses in **buffer coordinates**, or free buffer cells with
   an explicit support-plane height.
 - Configured grasps are **T_object_tool**, using DROID's actual reported tool
@@ -63,9 +63,9 @@ conda activate ./.conda
 python -m pip install --no-deps -e .
 ```
 
-No hardware initializes on import. The reset runtime does not require ROS,
-Patrik's environment, a GPU, or the ZED SDK. Independent ZED camera use still
-requires the lab's installed SDK bindings.
+No hardware initializes on import. Buffer capture uses the lab PC's ZED SDK
+bindings and measured camera mounting transform. Planning with a saved buffer
+calibration does not open a camera. ROS and Patrik's environment are not required.
 
 ## Configure and run
 
@@ -74,18 +74,23 @@ cp configs/station.example.json configs/station.local.json
 cp configs/reset.example.json configs/reset.local.json
 ```
 
-The numeric example poses/transit settings are illustrative, not a measured lab
-setup. Set `objects[].manipulation.tool_to_grasp_m` to the measured offset for
-DROID's reported tool origin, or configure explicit `grasps` instead. The
-example deliberately leaves this unknown offset null. Supply actual base-frame
-observations, starting tool pose, buffer support height and transit height.
-Marker-camera extrinsics are not needed when supplying cube poses directly.
+The numeric example poses/transit settings are illustrative. The configured
+`objects[].manipulation.tool_to_grasp_m` is **0.172 m**, measured from the
+flange (`panda_link8`, DROID's configured tool frame) to the gripping point.
+Supply actual base-frame observations, starting tool pose, buffer support
+height and transit height before a physical transfer.
+Buffer detection requires the measured wrist-camera mounting transform in the
+local station config. `--scan-buffer` replaces the saved buffer calibration.
 
-Plan without a DROID connection:
+Plan without sending movement commands:
 
 ```bash
 python -m auto_reset --config configs/station.local.json --request configs/reset.local.json
 ```
+
+`python -m auto_reset --dummy` supplies only example object coordinates and
+plans using the detected/cached buffer. Add `--scan-buffer` for a fresh capture
+and `--execute` to perform the transfer.
 
 For persistent manager state, omit `--request` and send one JSON request per
 stdin line. `--execute` enables the robot connection and `reset` requests:
@@ -112,8 +117,9 @@ docker run --rm -i --network host \
   droidauto --config configs/station.local.json
 ```
 
-The default container can plan using supplied poses. Add `--execute` to enable
-DROID requests. It contains headless OpenCV and no camera SDK or display stack.
+The default container can plan using supplied object poses and a saved buffer
+calibration. Add `--execute` to enable transfers. Fresh buffer capture runs in
+the lab environment with ZED bindings; the image contains no camera SDK.
 Only source, packaging files and example configs enter the build context;
 local configs, datasets, environments and recordings are excluded.
 

@@ -6,11 +6,17 @@ the existing server API. No reset orchestration or GUI belongs in this module.
 """
 
 from dataclasses import dataclass
+import logging
 import time
 
 import numpy as np
 
 from scene.transforms import pose_to_transform, transform, transform_to_pose
+
+
+LOG = logging.getLogger(__name__)
+MIN_GRIPPING_POINT_BASE_Z_M = 0.01
+FLANGE_TO_GRIPPING_POINT_M = 0.172
 
 
 @dataclass
@@ -43,28 +49,82 @@ class DroidRobot:
             self._client = None
 
     def initialize(self):
-        """Explicitly restart controllers using the existing project startup helper."""
+        """Explicitly launch controllers and attach only when both interfaces work."""
         self._relaunch_controllers()
         self._last_stamp = None
 
-    def _relaunch_controllers(self, attempts: int = 5) -> None:
-        """Preserve the existing explicit full-pair startup retry sequence."""
+    def _relaunch_controllers(self, timeout_s: float = 30.0, poll_interval_s: float = 0.5) -> None:
+        """Launch once; retry only transient interface-construction failures.
+
+        Polymetis can swallow the gripper metadata RPC error and return a
+        half-built GripperInterface. Recognize that exact failure as well as
+        gRPC startup errors. A dead Robotiq activation process needs the server
+        driver fix in patches/robotiq-activation-status.patch; restarting both
+        controllers repeatedly is not a replacement for that fix.
+        """
         import zerorpc
 
-        if attempts < 1:
-            raise ValueError("At least one relaunch attempt is required")
-        for attempt in range(1, attempts + 1):
+        if not np.isfinite([timeout_s, poll_interval_s]).all() or min(timeout_s, poll_interval_s) <= 0:
+            raise ValueError("Startup timeout and polling interval must be positive")
+        print("Starting arm and gripper controllers...", flush=True)
+        self._client.launch_controller()
+        print("Attaching arm and gripper interfaces...", flush=True)
+        deadline = time.monotonic() + timeout_s
+        last_error = None
+        waiting_reported = False
+        attached = False
+        previous_stamp = None
+        metadata_pending = False
+        while True:
             try:
-                print(f"Startup {attempt}/{attempts}: launch_controller()...", flush=True)
-                self._client.launch_controller()
-                print(f"Startup {attempt}/{attempts}: launch_robot()...", flush=True)
-                self._client.launch_robot()
-                return
+                if not attached:
+                    self._client.launch_robot()
+                    attached = True
+                # The gripper metadata attribute alone does not establish a
+                # functioning state connection. Exercise the complete read path.
+                state, timestamps = self._client.get_robot_state()
+                if (np.asarray(state["joint_positions"]).shape != (7,)
+                        or not np.isfinite(state["joint_positions"]).all()
+                        or not np.isfinite(float(state["gripper_position"]))):
+                    raise RuntimeError("DROID initialized but returned invalid arm/gripper feedback")
+                stamp = (float(timestamps["robot_timestamp_seconds"])
+                         + float(timestamps["robot_timestamp_nanos"]) / 1e9)
+                if not np.isfinite(stamp):
+                    raise RuntimeError("DROID initialized but returned an invalid feedback timestamp")
+                if previous_stamp is not None and stamp > previous_stamp:
+                    print("Arm and gripper interfaces ready; robot feedback is advancing.", flush=True)
+                    return
+                previous_stamp = stamp
+                last_error = None
             except zerorpc.exceptions.RemoteError as exc:
-                print(f"relaunch attempt {attempt}/{attempts} failed: {exc.name}", flush=True)
-                if attempt == attempts:
-                    raise RuntimeError(f"Robot server relaunch failed after {attempts} attempts: {exc}") from exc
-                time.sleep(0.1)
+                message = f"{exc.msg}\n{exc.traceback}"
+                missing_metadata = (exc.name == "AttributeError" and "GripperInterface" in message
+                                    and "metadata" in message)
+                grpc_starting = (exc.name == "_InactiveRpcError" and any(text in message for text in (
+                    "Robot context not valid", "StatusCode.UNAVAILABLE", "StatusCode.CANCELLED")))
+                # The existing gripper server returns None until driver metadata
+                # is registered; gRPC reports this as a serialization failure.
+                metadata_pending = (exc.name == "_InactiveRpcError" and "StatusCode.INTERNAL" in message
+                                    and any(text in message.lower() for text in (
+                                        "failed to serialize response", "exception serializing response")))
+                if not (missing_metadata or grpc_starting or metadata_pending):
+                    raise
+                last_error = exc
+                attached = False
+                previous_stamp = None
+                if not waiting_reported:
+                    print(f"Interfaces not ready ({exc.name}); waiting within this startup...", flush=True)
+                    waiting_reported = True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if last_error is None:
+                    detail = "Robot feedback remained frozen after interface attachment."
+                elif last_error.name == "AttributeError" or metadata_pending:
+                    detail = "Gripper metadata stayed unavailable; the Robotiq driver may have exited during activation."
+                else:
+                    detail = str(last_error.msg)
+                raise TimeoutError(f"DROID startup did not become ready within {timeout_s:g} s. {detail}") from last_error
+            time.sleep(min(poll_interval_s, remaining))
 
     def read_state(self) -> RobotState:
         # Adjacent orchestration calls can fall within one server update. Allow
@@ -106,6 +166,27 @@ class DroidRobot:
         state, timestamps = self._client.get_robot_state()
         return pose_to_transform(state["cartesian_position"]), timestamps
 
+    @staticmethod
+    def _clip_cartesian_target(target) -> np.ndarray:
+        """Raise a flange target until the gripping point is at least base Z=1 cm.
+
+        The gripping point is 172 mm along flange +Z. Only base-frame Z is
+        changed; XY and orientation are preserved. This constrains endpoints,
+        not DROID's joint-space trajectory or arbitrary direct joint commands.
+        """
+        target = transform(target)
+        offset_z = float(target[2, 2]) * FLANGE_TO_GRIPPING_POINT_M
+        minimum_flange_z = MIN_GRIPPING_POINT_BASE_Z_M - offset_z
+        if target[2, 3] < minimum_flange_z:
+            requested_point_z = float(target[2, 3]) + offset_z
+            target[2, 3] = minimum_flange_z
+            LOG.warning(
+                "Clipped Cartesian target: gripping-point base Z %.4f m -> %.4f m "
+                "(flange Z raised to %.4f m; XY and orientation preserved)",
+                requested_point_z, MIN_GRIPPING_POINT_BASE_Z_M, minimum_flange_z,
+            )
+        return target
+
     def joint_target_for_pose(self, target):
         """Ask DROID's working endpoint IK helper for seven plain joint values.
 
@@ -116,7 +197,7 @@ class DroidRobot:
         noise and sends no motion. Use the same base-frame pose difference as
         DROID's pose_diff/add_poses (not a tool-frame SE(3) relative transform).
         """
-        target = transform(target)
+        target = self._clip_cartesian_target(target)
         state = self.read_state()
         delta = np.eye(4)
         delta[:3, 3] = target[:3, 3] - state.tool_pose[:3, 3]
@@ -133,6 +214,7 @@ class DroidRobot:
         DROID performs IK and model-limit handling on the server. No motion RPC
         is retried: an exception leaves its outcome uncertain.
         """
+        target = self._clip_cartesian_target(target)
         if not blocking:
             return self._client.update_pose(transform_to_pose(target), False, False)
         joints = self.joint_target_for_pose(target)

@@ -15,7 +15,7 @@ and `buffer` live directly under `src/`. The application entry point is
 | Planning | Simple pick/place endpoint sequence; no collision-aware path planner or grasp search. |
 | Execution | DROID arm/gripper commands, joint-velocity settling, cooperative cancellation and failure logging. |
 | Verification | Final supplied observations compared with targets; result retained in manager state. |
-| Localization | Deferred; runtime accepts supplied poses and does not process images. |
+| Localization | Object poses are supplied; the existing Buffer detector captures/caches the fixed buffer pose. |
 | Existing utilities | Buffer ArUco/stereo localization, hand-eye/buffer calibration and independent ZED acquisition. |
 | Startup | JSON document/JSON-lines requests; optional DROID connection and explicit controller initialization. |
 | Container | Headless Python runtime; DROID is external, camera SDK is not included. |
@@ -34,7 +34,9 @@ ResetManager
 ├── Buffer and registered SceneObjects
 ├── TargetConfiguration
 ├── ResetPlanner
-├── DroidRobot (optional for offline planning)
+├── DroidRobot (tool-state read for capture; motion only for execution)
+├── ZedWristCamera and StationConfig (buffer acquisition)
+├── BufferCalibration (optional saved buffer pose)
 └── EventLog (optional)
 ```
 
@@ -43,25 +45,27 @@ fixtures and its independent localization methods. Desired placements belong
 to `TargetConfiguration`, separately from measured poses. `ResetPlanner`
 composes grasp/endpoints; `DroidRobot` delegates IK and robot control to DROID.
 The manager owns sequencing, final verification and outcome state. No separate
-reset-result object, driver protocol hierarchy or localizer adapter is needed.
+reset-result object, driver protocol hierarchy or object-localizer adapter is needed.
 
 ## Frames
 
-All transforms are T_parent_child and translations are metres. Observations
-supplied to the manager are T_base_object and T_base_buffer. Requested poses
+All transforms are T_parent_child and translations are metres. Object
+observations supplied to the manager are T_base_object. Buffer detection
+composes T_base_tool @ T_tool_camera @ T_camera_buffer. Requested poses
 are T_buffer_object; grasp transforms are T_object_tool. The tool frame must
 match the frame DROID reports. Cell targets put the geometric center half the
 object height above the explicitly supplied buffer support plane.
 
 Pure marker-to-cube geometry remains available on `Cube`; a marker center is
 10 mm outward from the block center along its local top normal. Full edge-aligned
-orientation additionally needs known marker mounting yaw. No marker image
-detector or preview is part of the reset runtime.
+orientation additionally needs known marker mounting yaw. Object-marker
+detection and preview are outside the reset runtime; buffer markers are detected
+by the existing Buffer methods.
 
 ## Reset lifecycle
 
 ```text
-supplied scene → planning → executing → awaiting_verification
+supplied object poses + detected/cached buffer → planning → executing → awaiting_verification
                                          ↓ supplied final measurements
                                       completed (success true/false)
 ```

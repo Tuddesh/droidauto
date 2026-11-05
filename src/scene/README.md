@@ -55,12 +55,12 @@ An explicit `grasps` list of T_cube_tool matrices (or six-value poses in station
 JSON) overrides generated top grasps. Otherwise configure:
 
 ```json
-{"manipulation":{"tool_to_grasp_m":null,"grasp_center_z_m":0.0,"grasp_yaw_rad":0.0}}
+{"manipulation":{"tool_to_grasp_m":0.172,"grasp_center_z_m":0.0,"grasp_yaw_rad":-0.7853981633974483}}
 ```
 
-Replace null with the **measured** distance from DROID's tool origin to the
-gripping point along tool +Z. There is no guessed default for this hardware
-measurement. `Cube.top_grasp(tool_to_grasp_m, grasp_center_z_m=0, yaw_rad=0)`
+The measured flange-to-gripping-point distance is **172 mm** along tool +Z.
+The configured yaw accounts for the Panda hand's -45 degree flange mounting.
+`Cube.top_grasp(tool_to_grasp_m, grasp_center_z_m=0, yaw_rad=0)`
 returns a tool-Z-down T_cube_tool with the gripping point at the selected cube
 height. The planner uses `grasp_poses()[0]` for both pickup and placement.
 The current helper assumes a downward top grasp on an upright cube.
