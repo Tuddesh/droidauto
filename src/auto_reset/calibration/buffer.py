@@ -374,7 +374,7 @@ def capture_calibration(config, robot, camera, report=None, review=False) -> Buf
             rms_text = f"{rms:.3f}" if rms is not None else "no pose"
             text = [f"{captured.view.upper()} | RMS: {rms_text} px | warning level: {config.camera['max_reprojection_rms_px']:g} px",
                     "GREEN = detected corners | MAGENTA crosses = projected model | RED = residual",
-                    "FROZEN FRAME | 1/2 eyes | A accept | R retake | P print pose | Q cancel",
+                    "FROZEN FRAME | 1/2 eyes | A accept | R retake | P print pose | Q / window X cancel",
                     str(failure) if failure else " | ".join(warnings) or "Fit available for inspection"]
             panel = np.full((height+160, width, 3), 25, np.uint8)
             panel[:annotated.shape[0], :annotated.shape[1]] = cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR)
@@ -405,7 +405,11 @@ def capture_calibration(config, robot, camera, report=None, review=False) -> Buf
                         cv2.imshow(title,panels[selected])
                         key = cv2.waitKey(50) & 0xff
                         choice = chr(key).lower() if key < 128 else ""
-                        if key == 27 or cv2.getWindowProperty(title,cv2.WND_PROP_VISIBLE)<1:choice="q"
+                        try:
+                            visible = cv2.getWindowProperty(title, cv2.WND_PROP_VISIBLE) >= 1
+                        except cv2.error:
+                            visible = False
+                        if key == 27 or not visible:choice="q"
                     else:
                         choice=input("Frozen scan [a=accept, r=retake, p=print pose, q=cancel]> ").strip().lower()
                     if choice in ("1","2"):
@@ -425,7 +429,11 @@ def capture_calibration(config, robot, camera, report=None, review=False) -> Buf
                         result.check_config(config)
                         return result
             finally:
-                if gui:cv2.destroyWindow(title)
+                if gui:
+                    try:
+                        cv2.destroyWindow(title)
+                    except cv2.error:
+                        pass  # Qt may have destroyed its last window already.
             if choice == "r":continue
         if failure is not None:raise failure
         result.check_config(config)

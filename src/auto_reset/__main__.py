@@ -26,6 +26,10 @@ def handle_request(manager, config, request, *, execute=False):
         raise ValueError(f"Unknown operation: {operation}")
     if operation == "reset" and not execute:
         raise ValueError("Reset execution requires --execute")
+    source = ("supplied" if "observations" in request else "camera"
+              if operation == "observe" or request.get("detect_objects") else "existing observations")
+    manager._record("request_received", operation=operation, object_pose_source=source,
+                    detect_buffer=bool(request.get("detect_buffer", False)))
     if operation == "verify":
         poses = {key: config.read_pose(value) for key, value in request["observations"].items()}
         manager.verify(poses, timestamp=request.get("timestamp_s"))
@@ -43,6 +47,12 @@ def handle_request(manager, config, request, *, execute=False):
                 current = request.get("current_tool_pose")
                 actions = manager.plan(target, current_tool_pose=None if current is None else config.read_pose(current))
                 return {"actions": actions, "state": dict(manager.state)}
+            print(f"Pickup coordinate source: {source}", file=sys.stderr, flush=True)
+            for object_id in target.poses:
+                obj = manager.objects[object_id]
+                if obj.pose is not None:
+                    print(f"{object_id} pickup cube center in base (m): {obj.pose[:3, 3].tolist()}",
+                          file=sys.stderr, flush=True)
             manager.reset(target)
     response = {"state": dict(manager.state)}
     if operation == "observe":

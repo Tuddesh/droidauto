@@ -158,7 +158,7 @@ is imposed. Inputs and annotated frozen frames are saved for every attempt.
         panel = np.full((height + 160, width, 3), 25, dtype=np.uint8)
         panel[:annotated.shape[0], :annotated.shape[1]] = annotated
         lines = [f"{frame.view.upper()} | FROZEN cube observation",
-                 "1/2 eyes | A accept | R retake | P print poses | Q cancel"]
+                 "1/2 eyes | A accept | R retake | P print poses | Q / window X cancel"]
         for object_id, result in report["objects"].items():
             if "error" in result:
                 lines.append(f"{object_id}: {result['error']}")
@@ -200,7 +200,11 @@ is imposed. Inputs and annotated frozen frames are saved for every attempt.
                     cv2.imshow(title, panels[selected])
                     key = cv2.waitKey(50) & 0xff
                     choice = chr(key).lower() if key < 128 else ""
-                    if key == 27 or cv2.getWindowProperty(title, cv2.WND_PROP_VISIBLE) < 1:
+                    try:
+                        visible = cv2.getWindowProperty(title, cv2.WND_PROP_VISIBLE) >= 1
+                    except cv2.error:
+                        visible = False  # Qt may already have removed its last window.
+                    if key == 27 or not visible:
                         choice = "q"
                 else:
                     choice = input("Frozen cube scan [a=accept, r=retake, p=print poses, q=cancel]> ").strip().lower()
@@ -218,5 +222,8 @@ is imposed. Inputs and annotated frozen frames are saved for every attempt.
                     break
         finally:
             if gui:
-                cv2.destroyWindow(title)
+                try:
+                    cv2.destroyWindow(title)
+                except cv2.error:
+                    pass  # Closing the last Qt window can already destroy its receiver.
     return poses, report
