@@ -38,16 +38,11 @@ The backend provides:
   `wait_until_stopped()`.
 
 Opening the RPC connection does not initialize controllers or move the robot.
-`initialize()` launches controllers once, then attaches interfaces with a
-30-second readiness timeout. It recognizes transient arm gRPC failures and the
-known missing-gripper-metadata constructor failure. Unrelated errors propagate.
-Startup remains explicit; controller restarts are not repeated automatically.
-
-The Robotiq driver must refresh status after requesting activation. The patch
-`patches/robotiq-activation-status.patch` fixes that check in the existing server
-driver constructor and waits for its gRPC connection before publishing metadata.
-Apply it from the DROID checkout root with `git apply /path/to/patch`; it is
-prepared for review and has not been applied to the NUC.
+`initialize()` uses existing RPCs to start controllers and attach interfaces.
+Transient attachment errors are retried within a 30-second readiness window.
+Persistent missing gripper metadata permits one recovery relaunch after five
+seconds; recovery is handled inside the same initialization call. Unrelated
+errors propagate. No server files or installed drivers are modified.
 The RPC client uses a 60-second timeout and a 20-second heartbeat.
 
 `RobotState` contains the measured tool transform, seven joint positions,

@@ -54,13 +54,13 @@ class DroidRobot:
         self._last_stamp = None
 
     def _relaunch_controllers(self, timeout_s: float = 30.0, poll_interval_s: float = 0.5) -> None:
-        """Launch once; retry only transient interface-construction failures.
+        """Initialize using existing DROID RPCs, with one bounded gripper recovery.
 
         Polymetis can swallow the gripper metadata RPC error and return a
-        half-built GripperInterface. Recognize that exact failure as well as
-        gRPC startup errors. A dead Robotiq activation process needs the server
-        driver fix in patches/robotiq-activation-status.patch; restarting both
-        controllers repeatedly is not a replacement for that fix.
+        half-built GripperInterface. Retry transient attachment failures. If
+        gripper metadata remains unavailable for five seconds, relaunch the
+        existing controllers once within this initialization call. No server
+        files or installed drivers are modified. Unrelated errors propagate.
         """
         import zerorpc
 
@@ -75,6 +75,8 @@ class DroidRobot:
         attached = False
         previous_stamp = None
         metadata_pending = False
+        metadata_missing_since = None
+        recovery_used = False
         while True:
             try:
                 if not attached:
@@ -96,10 +98,12 @@ class DroidRobot:
                     return
                 previous_stamp = stamp
                 last_error = None
+                metadata_missing_since = None
             except zerorpc.exceptions.RemoteError as exc:
                 message = f"{exc.msg}\n{exc.traceback}"
-                missing_metadata = (exc.name == "AttributeError" and "GripperInterface" in message
-                                    and "metadata" in message)
+                missing_metadata = (exc.name == "AttributeError" and (
+                    ("GripperInterface" in message and "metadata" in message)
+                    or "_max_gripper_width" in message))
                 grpc_starting = (exc.name == "_InactiveRpcError" and any(text in message for text in (
                     "Robot context not valid", "StatusCode.UNAVAILABLE", "StatusCode.CANCELLED")))
                 # The existing gripper server returns None until driver metadata
@@ -112,6 +116,17 @@ class DroidRobot:
                 last_error = exc
                 attached = False
                 previous_stamp = None
+                now = time.monotonic()
+                if missing_metadata or metadata_pending:
+                    if metadata_missing_since is None:
+                        metadata_missing_since = now
+                    if not recovery_used and now - metadata_missing_since >= 5.0 and now < deadline:
+                        LOG.warning("Gripper initialization stayed incomplete; recovering DROID controllers once.")
+                        recovery_used = True
+                        self._client.launch_controller()
+                        metadata_missing_since = None
+                else:
+                    metadata_missing_since = None
                 if not waiting_reported:
                     print(f"Interfaces not ready ({exc.name}); waiting within this startup...", flush=True)
                     waiting_reported = True
@@ -120,7 +135,9 @@ class DroidRobot:
                 if last_error is None:
                     detail = "Robot feedback remained frozen after interface attachment."
                 elif last_error.name == "AttributeError" or metadata_pending:
-                    detail = "Gripper metadata stayed unavailable; the Robotiq driver may have exited during activation."
+                    detail = "Gripper metadata stayed unavailable."
+                    if recovery_used:
+                        detail += " One controller recovery was already attempted."
                 else:
                     detail = str(last_error.msg)
                 raise TimeoutError(f"DROID startup did not become ready within {timeout_s:g} s. {detail}") from last_error
