@@ -17,6 +17,7 @@ from scene.transforms import pose_to_transform, transform, transform_to_pose
 LOG = logging.getLogger(__name__)
 MIN_GRIPPING_POINT_BASE_Z_M = 0.01
 FLANGE_TO_GRIPPING_POINT_M = 0.172
+GRIPPER_SETTLE_S = 2.5
 
 
 @dataclass
@@ -245,12 +246,16 @@ class DroidRobot:
         return self._client.update_joints(joints.tolist(), False, blocking)
 
     def open_gripper(self) -> None:
-        """Send one blocking normalized-position command: 0 is fully open."""
-        return self._client.update_gripper(0.0, False, True)
+        """Command fully open, then allow 2.5 seconds for physical movement."""
+        result = self._client.update_gripper(0.0, False, True)
+        time.sleep(GRIPPER_SETTLE_S)
+        return result
 
     def close_gripper(self) -> None:
-        """Send one blocking normalized-position command: 1 is fully closed."""
-        return self._client.update_gripper(1.0, False, True)
+        """Command fully closed, then allow 2.5 seconds for physical movement."""
+        result = self._client.update_gripper(1.0, False, True)
+        time.sleep(GRIPPER_SETTLE_S)
+        return result
 
     def read_gripper_position(self) -> float:
         """Read normalized gripper feedback without arm-motion/state-age gates."""
