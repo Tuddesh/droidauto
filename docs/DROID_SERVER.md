@@ -104,7 +104,7 @@ comparing the tool pose to the requested endpoint. Gripper methods call
 ## Camera backend
 
 `src/auto_reset/hardware/zed.py` provides `ZedWristCamera` and `CameraFrame`.
-It captures rectified left/right images at HD2K (2208 x 1242 per eye) and
+It captures rectified left/right images at HD720 (1280 x 720 per eye) and
 15 FPS with matching intrinsics. The reset manager opens it for initial buffer
 detection or an explicit rescan. Object poses are supplied directly. Stereo eyes
 share one SDK grab and timestamp. The SDK rectified stereo transform supplies
