@@ -133,7 +133,8 @@ class ResetManager:
             # capture; a frozen pre-stop pose must not become a new calibration.
             self.robot.read_state()
             with self.camera as camera:
-                calibration = capture_calibration(self.station_config, self.robot, camera)
+                calibration = capture_calibration(self.station_config, self.robot, camera,
+                                                  review=self.station_config.camera.get("review_capture", False))
             self.robot.read_state()
             path = self.station_config.resolve(self.station_config.data["calibration_file"])
             calibration.save(path)

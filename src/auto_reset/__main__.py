@@ -55,9 +55,14 @@ def main():
                         help="Supply example object coordinates; buffer is detected or loaded from calibration")
     parser.add_argument("--execute", action="store_true", help="Connect DROID and allow reset requests")
     parser.add_argument("--scan-buffer", action="store_true", help="Capture the stationary buffer again instead of loading its saved pose")
+    parser.add_argument("--review-buffer", action="store_true", help="Show the frozen scan images and wait for accept/retake/cancel")
+    parser.add_argument("--no-review", action="store_true", help="Skip interactive capture review for automated JSON callers")
     parser.add_argument("--initialize-controllers", action="store_true", help="Explicitly relaunch DROID controllers at startup")
     args = parser.parse_args()
+    if args.review_buffer and args.no_review:
+        parser.error("Choose --review-buffer or --no-review")
     config = StationConfig(args.config)
+    config.camera["review_capture"] = not args.no_review and (args.review_buffer or sys.stdin.isatty())
     if args.dummy:
         args.request = config.resolve("reset.example.json")
         print(f"Using dummy object coordinates from {args.request}; buffer pose comes from detection", file=sys.stderr, flush=True)

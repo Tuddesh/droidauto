@@ -481,7 +481,7 @@ class Buffer(PhysicalObject):
                                          matrix[:3, 3], self.camera_matrix, self.distortion_coefficients)
         return float(np.sqrt(np.mean(np.sum((projected.reshape(-1, 2) - observed) ** 2, axis=1))))
 
-    def draw_localization(self, image_rgb: np.ndarray) -> np.ndarray:
+    def draw_localization(self, image_rgb: np.ndarray, camera_buffer=None) -> np.ndarray:
         """Annotate the image from the last localize() call without redetecting.
 
         Green outlines match this layout; red outlines are detected IDs absent
@@ -501,4 +501,19 @@ class Buffer(PhysicalObject):
             x, y = points[0]
             cv2.putText(image, label, (max(0, x), max(18, y - 8)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+            if marker_id in known and camera_buffer is not None and self.last_localization is not None:
+                column, row = known[marker_id]
+                half = self.item_at(column, row).marker_size_mm / 2000
+                square = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]])
+                angle = np.radians(self.last_localization.get("marker_yaw_degrees", {}).get(str(marker_id), 0))
+                c, s = np.cos(angle), np.sin(angle)
+                rotation = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+                pose = np.asarray(camera_buffer)
+                projected = cv2.projectPoints(square @ rotation.T + self.cell_center_m(column, row),
+                                              cv2.Rodrigues(pose[:3, :3])[0], pose[:3, 3],
+                                              self.camera_matrix, self.distortion_coefficients)[0].reshape(4, 2)
+                for actual, fitted in zip(np.asarray(corners).reshape(4, 2), projected):
+                    a, b = tuple(np.rint(actual).astype(int)), tuple(np.rint(fitted).astype(int))
+                    cv2.line(image, a, b, (255, 70, 50), 2, cv2.LINE_AA)
+                    cv2.drawMarker(image, b, (255, 0, 255), cv2.MARKER_CROSS, 12, 2)
         return image
