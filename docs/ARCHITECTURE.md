@@ -12,7 +12,7 @@ and `buffer` live directly under `src/`. The application entry point is
 | Cube | 40 x 40 x 20 mm, centered 38 mm top marker, DICT_ARUCO_ORIGINAL ID 27, aligned marker/cube edges. |
 | Grasp geometry | Explicit object/tool transforms or a downward top grasp from a measured tool offset. |
 | Targets | Buffer-relative poses and one-cell placements using object dimensions and a supplied floor height. |
-| Planning | Simple pick/place endpoint sequence; no collision-aware path planner or grasp search. |
+| Planning | Pick/place endpoints; CUDA cuRobo IK with configured joint bounds and arm self-collision; no scene/path collision planner or grasp search. |
 | Execution | DROID arm/gripper commands, joint-velocity settling, cooperative cancellation and failure logging. |
 | Verification | Final supplied observations compared with targets; result retained in manager state. |
 | Localization | Shared ArUco detector; cube poses fitted from one/stereo images or supplied; fixed buffer pose captured/cached. |
@@ -43,7 +43,8 @@ ResetManager
 Objects own physical data and grasp descriptions. `Buffer` owns grid geometry,
 fixtures and its independent localization methods. Desired placements belong
 to `TargetConfiguration`, separately from measured poses. `ResetPlanner`
-composes grasp/endpoints; `DroidRobot` delegates IK and robot control to DROID.
+composes grasp/endpoints; `DroidRobot` solves IK locally with cuRobo on CUDA and
+delegates joint execution to DROID. All endpoint joints are solved before motion.
 The manager owns sequencing, final verification and outcome state. No separate
 reset-result object or driver protocol hierarchy is needed. The `localize_cubes`
 image adapter handles marker fitting and diagnostics without owning hardware.

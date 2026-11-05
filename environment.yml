@@ -13,3 +13,7 @@ dependencies:
   - pip
   - pip:
       - zerorpc==0.6.3
+      - --extra-index-url https://download.pytorch.org/whl/cu130
+      - torch==2.14.1+cu130
+      - warp-lang==1.18.0
+      - nvidia-curobo[cu13] @ git+https://github.com/NVlabs/curobo.git@b29a8c2ee6869585bb05b056b9ab53b9c0753106

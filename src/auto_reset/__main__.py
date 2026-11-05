@@ -45,7 +45,8 @@ def handle_request(manager, config, request, *, execute=False):
             target = config.make_target(request["targets"], manager.buffer, manager.objects)
             if operation == "plan":
                 current = request.get("current_tool_pose")
-                actions = manager.plan(target, current_tool_pose=None if current is None else config.read_pose(current))
+                actions = manager.plan(target, current_tool_pose=None if current is None else config.read_pose(current),
+                                       solve_ik=request.get("solve_ik", False))
                 return {"actions": actions, "state": dict(manager.state)}
             print(f"Pickup coordinate source: {source}", file=sys.stderr, flush=True)
             for object_id in target.poses:
@@ -92,10 +93,11 @@ def main():
     if args.detect_objects:
         request.pop("observations", None)
         request["detect_objects"] = True
+        request["solve_ik"] = True
     with ExitStack() as stack:
         # Even a plan needs a tool-state connection when capturing the buffer.
         # Connecting does not initialize controllers or send a movement command.
-        robot = stack.enter_context(DroidRobot(config.data["robot_endpoint"]))
+        robot = stack.enter_context(DroidRobot(config.data["robot_endpoint"], ik_config=config.data.get("ik")))
         log = EventLog(new_log_path(config.resolve(config.data["log_directory"])), echo=False)
         stack.callback(log.close)
         options = config.data.get("reset", {})

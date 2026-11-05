@@ -1,8 +1,8 @@
 """Existing DROID hardware backend, independent of experiment entry points.
 
-Connections and controller initialization are explicit. The current endpoint
-IK/joint adapter is retained. Gripper commands and motion-settling waits use
-the existing server API. No reset orchestration or GUI belongs in this module.
+Connections and controller initialization are explicit. Endpoint IK runs locally
+on an NVIDIA GPU with cuRobo; DROID receives joint targets only. Gripper commands
+and motion-settling waits use the existing server API.
 """
 
 from dataclasses import dataclass
@@ -11,7 +11,7 @@ import time
 
 import numpy as np
 
-from scene.transforms import pose_to_transform, transform, transform_to_pose
+from scene.transforms import pose_to_transform, transform
 
 
 LOG = logging.getLogger(__name__)
@@ -30,12 +30,16 @@ class RobotState:
 
 
 class DroidRobot:
-    def __init__(self, endpoint="tcp://192.168.88.12:4242", client=None, max_state_age_s=0.5):
+    def __init__(self, endpoint="tcp://192.168.88.12:4242", client=None, max_state_age_s=0.5,
+                 *, ik_config=None):
         self.endpoint = endpoint
         self._client = client
         self._owns_client = client is None
         self.max_state_age_s = max_state_age_s
         self._last_stamp = None
+        self.ik_config = ik_config
+        self._ik_solver = None
+        self.last_ik = None
 
     def __enter__(self):
         if self._client is None:
@@ -205,38 +209,142 @@ class DroidRobot:
             )
         return target
 
-    def joint_target_for_pose(self, target):
-        """Ask DROID's working endpoint IK helper for seven plain joint values.
+    def joint_target_for_pose(self, target, *, seed_joints=None):
+        """Solve flange IK locally on CUDA and return joints in DROID order.
 
-        The installed blocking update_pose passes the (joints, success) IK
-        tuple straight into torch.Tensor. The existing add_noise_to_joints RPC
-        correctly unpacks that tuple. Despite its name, it applies the supplied
-        deterministic Cartesian offset and solves endpoint IK; it adds no random
-        noise and sends no motion. Use the same base-frame pose difference as
-        DROID's pose_diff/add_poses (not a tool-frame SE(3) relative transform).
+        The cached cuRobo solver uses the Panda arm, without the stock Panda Hand
+        collision geometry. Joint bounds come from station configuration and
+        are intersected with the model limits before optimization. Supplying a
+        seed allows a whole endpoint sequence to be solved without robot calls.
+        No remote IK, Cartesian command or CPU fallback is used.
         """
         target = self._clip_cartesian_target(target)
-        state = self.read_state()
-        delta = np.eye(4)
-        delta[:3, 3] = target[:3, 3] - state.tool_pose[:3, 3]
-        delta[:3, :3] = target[:3, :3] @ state.tool_pose[:3, :3].T
-        joints = np.asarray(self._client.add_noise_to_joints(
-            state.joints.tolist(), transform_to_pose(delta)), dtype=float)
-        if joints.shape != (7,) or not np.isfinite(joints).all():
-            raise RuntimeError("DROID endpoint IK must return seven finite joint angles")
-        return joints.tolist()
+        self.last_ik = None
+        if self.ik_config is None:
+            raise ValueError("Local cuRobo IK requires the station's ik configuration; see station.example.json")
+        try:
+            import torch
+            from curobo.config_io import load_yaml
+            from curobo.content import get_robot_configs_path
+            from curobo.inverse_kinematics import InverseKinematics, InverseKinematicsCfg
+            from curobo.types import DeviceCfg, GoalToolPose, JointState, Pose
+            from curobo._src.types.robot import RobotCfg
+        except ImportError as exc:
+            raise RuntimeError("Install DroidAuto's CUDA dependencies from environment.yml; "
+                               "local IK requires CUDA PyTorch and cuRobo V2") from exc
+        from scipy.spatial.transform import Rotation
+
+        options = self.ik_config
+        device = torch.device(options["device"])
+        if device.type != "cuda" or not torch.cuda.is_available():
+            raise RuntimeError("cuRobo IK requires an available NVIDIA CUDA GPU; CPU fallback is disabled")
+        if self._ik_solver is None:
+            from copy import deepcopy
+            names = [f"panda_joint{i}" for i in range(1, 8)]
+            lower = np.asarray(options["joint_lower_rad"], dtype=float)
+            upper = np.asarray(options["joint_upper_rad"], dtype=float)
+            margin = float(options["joint_margin_rad"])
+            if (lower.shape != (7,) or upper.shape != (7,) or
+                    not np.isfinite([lower, upper]).all() or not np.isfinite(margin) or margin < 0):
+                raise ValueError("IK needs seven finite lower/upper joint bounds and a nonnegative margin")
+            if np.any(lower + margin >= upper - margin):
+                raise ValueError("IK joint margin leaves an empty joint range")
+            if options["tool_frame"] != "panda_link8":
+                raise ValueError("DROID reports the panda_link8 flange; IK must target that same frame")
+            seeds = options["num_seeds"]
+            if isinstance(seeds, bool) or not isinstance(seeds, int) or seeds < 1:
+                raise ValueError("ik.num_seeds must be a positive integer")
+            for key in ("position_tolerance_m", "orientation_tolerance_rad"):
+                if not np.isfinite(options[key]) or options[key] <= 0:
+                    raise ValueError(f"ik.{key} must be finite and positive")
+            robot_data = deepcopy(load_yaml(str(get_robot_configs_path() / options["robot_config"])))["robot_cfg"]
+            kin = robot_data["kinematics"]
+            kin["tool_frames"] = [options["tool_frame"]]
+            # The actual tool is a Robotiq. Keep the supplied Panda arm spheres,
+            # not fictitious Panda fingers/hand or an attached object.
+            links = [f"panda_link{i}" for i in range(8)]
+            kin["collision_link_names"] = links
+            kin["mesh_link_names"] = links
+            kin["extra_links"] = {}
+            kin["extra_collision_spheres"] = {}
+            kin["lock_joints"] = {}
+            kin["grasp_contact_link_names"] = []
+            for key in ("collision_spheres", "self_collision_buffer"):
+                kin[key] = {name: value for name, value in kin[key].items() if name in links}
+            kin["self_collision_ignore"] = {
+                name: [other for other in others if other in links]
+                for name, others in kin["self_collision_ignore"].items() if name in links
+            }
+            cspace = kin["cspace"]
+            indices = [cspace["joint_names"].index(name) for name in names]
+            for key in ("default_joint_position", "null_space_weight", "cspace_distance_weight"):
+                cspace[key] = [cspace[key][index] for index in indices]
+            cspace["joint_names"] = names
+            model = RobotCfg.create(robot_data, device_cfg=DeviceCfg(device=device, dtype=torch.float32))
+            bounds = model.kinematics.get_joint_limits()
+            if bounds.joint_names != names:
+                raise RuntimeError(f"Unexpected cuRobo joint order: {bounds.joint_names}")
+            configured = torch.tensor(np.stack((lower + margin, upper - margin)), device=device, dtype=torch.float32)
+            bounds.position[0].copy_(torch.maximum(bounds.position[0], configured[0]))
+            bounds.position[1].copy_(torch.minimum(bounds.position[1], configured[1]))
+            if torch.any(bounds.position[0] >= bounds.position[1]).item():
+                raise ValueError("Configured IK bounds do not overlap the robot model")
+            config = InverseKinematicsCfg.create(
+                robot=model, device_cfg=DeviceCfg(device=device, dtype=torch.float32),
+                num_seeds=seeds, self_collision_check=True,
+                position_tolerance=options["position_tolerance_m"],
+                orientation_tolerance=options["orientation_tolerance_rad"],
+                use_cuda_graph=True,
+            )
+            self._ik_solver = InverseKinematics(config)
+            self._ik_bounds = bounds.position.clone()
+            self._ik_joint_names = names
+            print(f"cuRobo IK on {torch.cuda.get_device_name(device)} ({device}); flange panda_link8", flush=True)
+        seed = np.asarray(self.read_state().joints if seed_joints is None else seed_joints, dtype=float)
+        if seed.shape != (7,) or not np.isfinite(seed).all():
+            raise ValueError("IK seed must contain seven finite joint angles")
+        current = torch.tensor(seed[None, :], device=device, dtype=torch.float32)
+        xyzw = Rotation.from_matrix(target[:3, :3]).as_quat()
+        goal = Pose(position=torch.tensor(target[None, :3, 3], device=device, dtype=torch.float32),
+                    quaternion=torch.tensor(xyzw[[3, 0, 1, 2]][None, :], device=device, dtype=torch.float32))
+        result = self._ik_solver.solve_pose(
+            GoalToolPose.from_poses({options["tool_frame"]: goal}, num_goalset=1),
+            current_state=JointState.from_position(current, joint_names=self._ik_joint_names),
+            return_seeds=options["num_seeds"],
+        )
+        output = result.js_solution
+        order = [output.joint_names.index(name) for name in self._ik_joint_names]
+        candidates = output.position[..., order].reshape(-1, 7)
+        if not candidates.is_cuda or not result.success.is_cuda:
+            raise RuntimeError("cuRobo returned CPU results; CUDA-only IK is required")
+        valid = (result.success.reshape(-1) & torch.isfinite(candidates).all(dim=1) &
+                 (candidates >= self._ik_bounds[0]).all(dim=1) &
+                 (candidates <= self._ik_bounds[1]).all(dim=1))
+        if not valid.any().item():
+            raise RuntimeError("cuRobo found no feasible IK solution within the configured joint bounds; no command sent")
+        distance = ((candidates - current) ** 2).sum(dim=1).masked_fill(~valid, float("inf"))
+        selected = int(distance.argmin().item())
+        solution = candidates[selected]
+        joints = solution.detach().cpu().tolist()
+        self.last_ik = {
+            "backend": "curobo", "device": str(device), "target_pose": target.tolist(),
+            "joint_names": self._ik_joint_names, "joints": joints,
+            "position_error_m": float(result.position_error.reshape(-1)[selected].item()),
+            "orientation_error_rad": float(result.rotation_error.reshape(-1)[selected].item()),
+            "min_joint_margin_rad": float(torch.minimum(solution - self._ik_bounds[0],
+                                                        self._ik_bounds[1] - solution).min().item()),
+        }
+        return joints
 
     def command_pose(self, target, blocking=True):
-        """Solve an endpoint on DROID, then send one joint move.
+        """Solve an endpoint on the local CUDA GPU, then send one joint move.
 
-        DROID performs IK and model-limit handling on the server. No motion RPC
+        Blocking and nonblocking calls both use local cuRobo IK. No motion RPC
         is retried: an exception leaves its outcome uncertain.
         """
         target = self._clip_cartesian_target(target)
-        if not blocking:
-            return self._client.update_pose(transform_to_pose(target), False, False)
         joints = self.joint_target_for_pose(target)
-        return self.command_joints(joints, blocking=True)
+        return self.command_joints(joints, blocking=blocking)
 
     def command_joints(self, joints, blocking=True):
         """Send a taught seven-joint endpoint through DROID's joint API."""

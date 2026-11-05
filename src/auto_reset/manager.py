@@ -220,7 +220,7 @@ class ResetManager:
                 for key, obj in {self.buffer.object_id: self.buffer, **self.objects}.items()}
 
     def plan(self, target_configuration: TargetConfiguration, *,
-             current_tool_pose: np.ndarray | None = None) -> ResetPlan:
+             current_tool_pose: np.ndarray | None = None, solve_ik: bool = False) -> ResetPlan:
         """Build a complete plan before execution; supplied tool pose allows offline use."""
         if target_configuration.buffer_id != self.buffer.object_id:
             raise ValueError("Target configuration belongs to a different buffer")
@@ -236,6 +236,9 @@ class ResetManager:
             current_tool_pose = self.robot.read_state().tool_pose
         actions = self.planner.plan(self.objects, target_configuration,
                                     buffer_pose=self.buffer.pose, current_tool_pose=current_tool_pose)
+        if solve_ik and self.robot is None:
+            raise ValueError("Joint planning needs a robot backend with local cuRobo IK")
+        seed = self.robot.read_state().joints if solve_ik else None
         for action in actions:
             if action["type"] == "move":
                 requested = transform(action["pose"])
@@ -244,6 +247,12 @@ class ResetManager:
                     self._record("target_clipped", name=action["name"], object_id=action["object_id"],
                                  requested_pose=requested.tolist(), applied_pose=clipped.tolist())
                 action["pose"] = clipped.tolist()
+                if solve_ik:
+                    joints = self.robot.joint_target_for_pose(clipped, seed_joints=seed)
+                    action["joints"] = joints
+                    seed = np.asarray(joints, dtype=float)
+                    self._record("ik_solved", name=action["name"], object_id=action["object_id"],
+                                 **self.robot.last_ik)
         return actions
 
     def reset(self, target_configuration: TargetConfiguration) -> None:
@@ -264,7 +273,7 @@ class ResetManager:
             try:
                 self._record("reset_started", scene=self._state["scene_before"],
                              targets={key: value.tolist() for key, value in self.target_configuration.poses.items()})
-                actions = self.plan(self.target_configuration)
+                actions = self.plan(self.target_configuration, solve_ik=True)
                 self._record("plan_created", actions=actions)
                 self._state["phase"] = "executing"
                 # Once execution begins, the supplied pickup poses cannot describe
@@ -298,7 +307,7 @@ class ResetManager:
             self._record("action_started", **self._state["current_action"])
             kind = action["type"]
             if kind == "move":
-                self.robot.command_pose(transform(action["pose"]), blocking=True)
+                self.robot.command_joints(action["joints"], blocking=True)
                 self.robot.wait_until_stopped(timeout_s=self.motion_timeout_s)
             elif kind == "open_gripper":
                 self.robot.open_gripper()

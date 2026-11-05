@@ -40,10 +40,17 @@ Fixture-occupied cells and oversized rotated footprints are rejected.
 A transfer is: initial lift at current XY → open → above pickup → pickup →
 close → lift → above destination → place → open → retreat. Transit height is
 absolute base Z, raised as needed above pickup/place tool heights by the
-configured lift clearance. There is no collision model, trajectory optimizer,
+configured lift clearance. There is no scene collision model, trajectory optimizer,
 client-side interpolation or positional-error gate. These are endpoints;
 DROID's joint-space trajectory between them need not be Cartesian-straight.
 The first configured grasp is selected; automatic grasp optimization is absent.
+
+Before execution, cuRobo solves all endpoint poses on the configured CUDA GPU,
+with the station's joint bounds and Panda arm self-collision model. Solutions
+are selected near the preceding joint configuration and stored as seven joint
+angles per move. A failed solve prevents the entire command sequence from
+starting. Execution sends only joint targets to DROID, without remote IK.
+The Robotiq and scene are not included in collision geometry.
 
 Each arm command is blocking, followed by a sustained-low-joint-velocity wait.
 A server-reported unsuccessful command or exception aborts the remaining
@@ -71,7 +78,8 @@ contains detections, fitted poses, errors and image paths. `detect_buffer=True`
 can be combined with object detection to refresh the buffer too.
 
 `manager.plan(target, current_tool_pose=...)` is offline; omit the tool pose to
-read it from a connected robot. `manager.reset(target)` reads the actual tool
+read it from a connected robot. `solve_ik=True` additionally needs measured
+starting joints and the configured local CUDA solver. `manager.reset(target)` reads the actual tool
 pose, plans before sending commands, logs each action and invalidates moved
 objects' previous poses. It finishes at `awaiting_verification`, success unknown.
 
@@ -117,6 +125,8 @@ An `observe` request without a batch captures cube poses and uses the cached
 buffer; include `"detect_buffer": true` to rescan it. Its response includes the
 observed poses. Plan/reset requests can include `"detect_objects": true` instead
 of an `observations` batch.
+Plan requests can set `"solve_ik": true` to include local IK joint targets.
+The `--detect-objects` one-shot mode includes this joint-planning step.
 The default operation is `plan`. Errors are returned with manager state and log
 path; one-shot errors exit nonzero. In streaming mode subsequent requests can
 correct input or provide new measurements. Verification must use actual final

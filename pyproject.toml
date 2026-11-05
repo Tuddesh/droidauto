@@ -17,6 +17,11 @@ dependencies = [
 
 [project.optional-dependencies]
 experiments = ["matplotlib", "pillow"]
+cuda = [
+    "torch==2.14.1+cu130",
+    "warp-lang==1.18.0",
+    "nvidia-curobo[cu13] @ git+https://github.com/NVlabs/curobo.git@b29a8c2ee6869585bb05b056b9ab53b9c0753106",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

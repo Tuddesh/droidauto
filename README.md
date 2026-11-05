@@ -19,8 +19,9 @@ pose and source image; subsequent resets reuse that fixed pose.
 - Configured grasps are **T_object_tool**, using DROID's actual reported tool
   frame. A top-grasp helper accepts a measured tool-to-gripping-point offset.
 - Planning creates lift/transit/pick/place/gripper endpoints. There is no dense
-  interpolation or client-side positional-error gate. DROID owns IK and motion;
-  the client waits for joint motion to settle before sending another endpoint.
+  interpolation or client-side positional-error gate. cuRobo solves endpoint IK
+  on the local CUDA GPU; DROID executes the resulting joint targets. The client
+  waits for joint motion to settle before sending another endpoint.
 - After execution, state is `awaiting_verification`, with `success: null`.
   Only supplied final measurements can establish success or failure.
 - Events, commands, errors and final placement deviations are logged as JSONL.
@@ -114,13 +115,15 @@ No object motion or fresh observation is inferred from a successful RPC.
 
 ```bash
 docker build -t droidauto .
-docker run --rm -i --network host \
+docker run --rm -i --gpus all --network host \
   -v "$PWD/configs:/app/configs:ro" \
   -v "$PWD/runs:/app/runs" \
   droidauto --config configs/station.local.json
 ```
 
-The default container can plan using supplied object poses and a saved buffer
+The container includes pinned CUDA PyTorch and cuRobo dependencies. Execution
+requires an NVIDIA GPU and the NVIDIA Container Toolkit (`--gpus all`); CPU IK
+fallback is disabled. It can plan using supplied poses and a saved buffer
 calibration. Add `--execute` to enable transfers. Fresh buffer capture runs in
 the lab environment with ZED bindings; the image contains no camera SDK.
 Only source, packaging files and example configs enter the build context;

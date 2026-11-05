@@ -6,6 +6,7 @@
 DroidAuto client on the control PC
     ├── ZED camera acquisition
     ├── scene/reset framework
+    ├── cuRobo IK on the local CUDA GPU
     └── ZeroRPC → DROID server on NUC → Polymetis → Franka and gripper
 ```
 
@@ -62,24 +63,35 @@ manual-capture age/stationarity gates; the operator establishes stationarity.
 | DROID gripper position | Normalized position, 0 open and 1 closed; both reset backend methods are implemented. |
 
 `command_joints()` sends one `update_joints(joints, False, blocking)` request.
-The backend validates the list's shape/numeric values and does not maintain a
-copied table of robot joint limits.
+The backend validates the list's shape/numeric values. Local IK additionally
+uses the station's explicit `ik` joint bounds, intersected with its robot model.
 
 Cartesian targets are clipped so the gripping point stays at base Z >= -0.025 m,
 including its measured 172 mm flange offset. Clipping emits a warning and reset
 logs record the applied endpoint. XY and orientation are preserved. This limits
 endpoints; joint-space paths and arbitrary direct joint commands are not constrained.
 
-For a blocking Cartesian endpoint, `command_pose()` uses the server's
-`add_noise_to_joints(seed, delta)` endpoint-IK helper, then calls blocking
-`update_joints`. Despite its name, this helper applies the supplied exact pose
-offset and does not add random noise or command motion. IK is performed on
-the server. This path works around the installed blocking `update_pose` branch
-passing an IK `(joint_angles, success)` tuple into a tensor constructor.
+`joint_target_for_pose()` uses local cuRobo V2 on the station's NVIDIA GPU.
+The target is `panda_link8`, the same flange frame DROID reports. The stock
+Panda Hand geometry is excluded because the actual gripper is a Robotiq.
+Both blocking and nonblocking `command_pose()` solve locally and send only
+`update_joints`; no DROID Cartesian or Polymetis IK endpoint is called.
+
+The station's `ik` configuration names the CUDA device, solve tolerances,
+number of seeds and joint bounds. The example bounds reproduce the audited
+DROID Panda hardware-client ranges; the 0.2 rad inward margin matches its
+safety-controller activation zone. Limits are applied before optimization,
+and only successful, finite solutions inside those bounds can be selected.
+Among valid solutions, the one nearest the preceding joint configuration is
+selected. There is no CPU or remote-IK fallback.
+
+Reset planning solves all endpoint joint targets before sending any arm or
+gripper command. Each move retains both its Cartesian pose and seven joint
+angles. `ik_solved` events record joint targets, pose errors and minimum
+distance from the effective joint bounds. A failed solve aborts planning.
 
 The underlying move is generated in joint space; the backend does not promise
-a straight Cartesian path. Nonblocking `command_pose()` forwards to DROID's
-incremental Cartesian API. No client interpolation or scene-reset policy is
+a straight Cartesian path. No client interpolation or scene-reset policy is
 implemented by this backend. `wait_until_stopped()` waits for sustained low
 joint velocities and checks the server's previous-command status, without
 comparing the tool pose to the requested endpoint. Gripper methods call
@@ -87,15 +99,16 @@ comparing the tool pose to the requested endpoint. Gripper methods call
 
 ## Current integration limitations
 
-- The IK helper can return its seed joints when IK fails; the adapter does not
-  receive a separate IK-success flag from this helper.
+- IK checks endpoint feasibility and arm self-collision. There is no table,
+  buffer or Robotiq collision model, and no continuous-path collision check.
 - Some server motion paths suppress controller exceptions. A completed RPC
   alone is not an independently measured placement result.
 - A blocking command may remain pending after an interrupted move. The client
   cannot recover an unresponsive RPC server through another RPC call, and it
   does not restart the NUC service automatically.
-- The adapter has no model/limit metadata query, collision planner or robot-side
-  cancellation API. It does not automatically retry motion commands.
+- The adapter has no hardware-client limit metadata query or robot-side
+  cancellation API. Configured bounds must match the NUC deployment; motion
+  commands are not automatically retried.
 - A reachable TCP port does not establish that robot feedback is live.
 - The camera-to-tool mounting frame must match the backend's reported tool
   frame; a transform measured against a different Franka end-effector frame
