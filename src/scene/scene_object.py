@@ -55,7 +55,7 @@ class Cube(SceneObject):
         """Return T_cube_tool for a downward tool-Z grasp.
 
         tool_to_grasp_m is the measured distance from DROID's reported tool
-        origin to the gripping point along tool +Z. The gripping point is at
+        origin to the selected TCP along tool +Z. The TCP is at
         cube (0, 0, grasp_center_z_m); yaw chooses the tool's X/Y orientation.
         This offset must be measured for the actual gripper/tool frame.
         """

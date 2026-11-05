@@ -15,8 +15,8 @@ from scene.transforms import pose_to_transform, transform
 
 
 LOG = logging.getLogger(__name__)
-MIN_GRIPPING_POINT_BASE_Z_M = -0.025
-FLANGE_TO_GRIPPING_POINT_M = 0.172
+MIN_FINGERTIP_BASE_Z_M = -0.025
+FLANGE_TO_CLOSED_FINGERTIP_M = 0.178
 GRIPPER_SETTLE_S = 2.5
 
 
@@ -190,22 +190,22 @@ class DroidRobot:
 
     @staticmethod
     def _clip_cartesian_target(target) -> np.ndarray:
-        """Raise a flange target to keep the gripping point at base Z >= -25 mm.
+        """Raise a flange target to keep the closed fingertips at Z >= -25 mm.
 
-        The gripping point is 172 mm along flange +Z. Only base-frame Z is
+        The closed fingertips are 178 mm along flange +Z. Only base-frame Z is
         changed; XY and orientation are preserved. This constrains endpoints,
         not DROID's joint-space trajectory or arbitrary direct joint commands.
         """
         target = transform(target)
-        offset_z = float(target[2, 2]) * FLANGE_TO_GRIPPING_POINT_M
-        minimum_flange_z = MIN_GRIPPING_POINT_BASE_Z_M - offset_z
+        offset_z = float(target[2, 2]) * FLANGE_TO_CLOSED_FINGERTIP_M
+        minimum_flange_z = MIN_FINGERTIP_BASE_Z_M - offset_z
         if target[2, 3] < minimum_flange_z:
             requested_point_z = float(target[2, 3]) + offset_z
             target[2, 3] = minimum_flange_z
             LOG.warning(
-                "Clipped Cartesian target: gripping-point base Z %.4f m -> %.4f m "
+                "Clipped Cartesian target: closed-fingertip base Z %.4f m -> %.4f m "
                 "(flange Z raised to %.4f m; XY and orientation preserved)",
-                requested_point_z, MIN_GRIPPING_POINT_BASE_Z_M, minimum_flange_z,
+                requested_point_z, MIN_FINGERTIP_BASE_Z_M, minimum_flange_z,
             )
         return target
 

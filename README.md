@@ -76,8 +76,10 @@ cp configs/reset.example.json configs/reset.local.json
 ```
 
 The numeric example poses/transit settings are illustrative. The configured
-`objects[].manipulation.tool_to_grasp_m` is **0.172 m**, measured from the
-flange (`panda_link8`, DROID's configured tool frame) to the gripping point.
+`objects[].manipulation.tool_to_grasp_m` is **0.169 m** from the flange
+(`panda_link8`, DROID's configured tool frame) to the grasp center. The grasp
+center targets the cube center by default (`grasp_center_z_m=0`). Height clipping
+separately uses the **0.178 m** closed-fingertip reach.
 Supply actual base-frame observations, starting tool pose, buffer support
 height and transit height before a physical transfer.
 Buffer detection requires the measured wrist-camera mounting transform in the
