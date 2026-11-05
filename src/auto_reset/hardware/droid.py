@@ -15,7 +15,7 @@ from scene.transforms import pose_to_transform, transform, transform_to_pose
 
 
 LOG = logging.getLogger(__name__)
-MIN_GRIPPING_POINT_BASE_Z_M = -0.028
+MIN_GRIPPING_POINT_BASE_Z_M = -0.025
 FLANGE_TO_GRIPPING_POINT_M = 0.172
 GRIPPER_SETTLE_S = 2.5
 
@@ -186,7 +186,7 @@ class DroidRobot:
 
     @staticmethod
     def _clip_cartesian_target(target) -> np.ndarray:
-        """Raise a flange target to keep the gripping point at base Z >= -28 mm.
+        """Raise a flange target to keep the gripping point at base Z >= -25 mm.
 
         The gripping point is 172 mm along flange +Z. Only base-frame Z is
         changed; XY and orientation are preserved. This constrains endpoints,
