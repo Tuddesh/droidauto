@@ -12,6 +12,7 @@ from contextlib import ExitStack, redirect_stdout
 import json
 from pathlib import Path
 import sys
+import traceback
 
 from auto_reset import ResetManager
 from auto_reset.calibration import BufferCalibration
@@ -134,6 +135,7 @@ def main():
                                   "log_path": str(log.path)}), flush=True)
                 return 130
             except Exception as exc:
+                log.emit("request_failed", reason=str(exc), traceback=traceback.format_exc())
                 print(json.dumps({"error": str(exc), "state": dict(manager.state),
                                   "log_path": str(log.path)}), flush=True)
                 if args.request:

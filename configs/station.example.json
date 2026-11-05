@@ -8,6 +8,7 @@
     "robot_config": "franka.yml",
     "tool_frame": "panda_link8",
     "num_seeds": 32,
+    "use_cuda_graph": false,
     "position_tolerance_m": 0.001,
     "orientation_tolerance_rad": 0.01,
     "joint_limits_source": "DROID config/panda/franka_hardware.yaml; joint_pos margin matches its safety controller",

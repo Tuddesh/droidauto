@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 import math
 from threading import Event, Lock
 import time
+import traceback
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
@@ -248,6 +249,8 @@ class ResetManager:
                                  requested_pose=requested.tolist(), applied_pose=clipped.tolist())
                 action["pose"] = clipped.tolist()
                 if solve_ik:
+                    self._record("ik_started", name=action["name"], object_id=action["object_id"],
+                                 target_pose=clipped.tolist(), seed_joints=seed.tolist())
                     joints = self.robot.joint_target_for_pose(clipped, seed_joints=seed)
                     action["joints"] = joints
                     seed = np.asarray(joints, dtype=float)
@@ -287,7 +290,7 @@ class ResetManager:
                 self._state.update(phase="cancelled" if isinstance(exc, (ResetCancelled, KeyboardInterrupt)) else "failed",
                                    success=False, failure_reason=str(exc) or type(exc).__name__)
                 self._record("reset_failed", phase=self._state["phase"], reason=self._state["failure_reason"],
-                             current_action=self._state["current_action"])
+                             current_action=self._state["current_action"], traceback=traceback.format_exc())
                 raise
             finally:
                 self._state["timing"]["execution_finished_s"] = time.time()

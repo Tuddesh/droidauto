@@ -294,12 +294,13 @@ class DroidRobot:
                 num_seeds=seeds, self_collision_check=True,
                 position_tolerance=options["position_tolerance_m"],
                 orientation_tolerance=options["orientation_tolerance_rad"],
-                use_cuda_graph=True,
+                use_cuda_graph=options.get("use_cuda_graph", False),
             )
             self._ik_solver = InverseKinematics(config)
             self._ik_bounds = bounds.position.clone()
             self._ik_joint_names = names
-            print(f"cuRobo IK on {torch.cuda.get_device_name(device)} ({device}); flange panda_link8", flush=True)
+            print(f"cuRobo IK on {torch.cuda.get_device_name(device)} ({device}); flange panda_link8; "
+                  f"CUDA graphs {'enabled' if config.use_cuda_graph else 'disabled'}", flush=True)
         seed = np.asarray(self.read_state().joints if seed_joints is None else seed_joints, dtype=float)
         if seed.shape != (7,) or not np.isfinite(seed).all():
             raise ValueError("IK seed must contain seven finite joint angles")
