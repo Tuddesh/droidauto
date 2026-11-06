@@ -99,7 +99,7 @@ class StationConfig:
             marker = item.get("marker", {})
             cube = Cube(object_id=object_id,
                         dimensions_m=tuple(item.get("dimensions_m", (0.04, 0.04, 0.02))),
-                        marker_size_m=marker.get("size_m", 0.038),
+                        marker_size_m=marker.get("size_m", 0.040),
                         marker_center_xy_m=tuple(marker.get("center_xy_m", (0, 0))),
                         marker_yaw_rad=marker.get("yaw_rad"),
                         grasps=[self.read_pose(value) for value in item.get("grasps", [])],

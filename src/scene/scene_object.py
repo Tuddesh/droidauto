@@ -34,7 +34,7 @@ class Cube(SceneObject):
     """The project's 40 x 40 x 20 mm marker-topped manipulation block.
 
     The object origin is its geometric center. X/Y span the square base and
-    +Z points toward the centered 38 mm top marker. The marker's +Z must point
+    +Z points toward the centered 40 mm top marker. The marker's +Z must point
     outward from that face. Its ID and concrete 5x5-pattern dictionary can be
     bound once from a confirmed localization. Marker yaw relative to the
     cube's physical X/Y edges is explicit; centering does not establish yaw.
@@ -46,7 +46,7 @@ class Cube(SceneObject):
     marker_family: str = field(default="5x5", init=False)
     marker_dictionary: str | None = None
     marker_id: int | None = None
-    marker_size_m: float = 0.038
+    marker_size_m: float = 0.040
     marker_center_xy_m: tuple[float, float] = (0.0, 0.0)
     marker_yaw_rad: float | None = None
 

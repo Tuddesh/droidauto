@@ -11,7 +11,7 @@ pose and source image; subsequent resets reuse that fixed pose.
 
 ## Current behavior
 
-- Cube: **40 x 40 x 20 mm**, centered **38 mm** top marker,
+- Cube: **40 x 40 x 20 mm**, centered **40 mm** top marker,
   **DICT_ARUCO_ORIGINAL / ID 5**, aligned with the cube edges. Origin is the geometric center.
 - Camera and supplied object observations use the **robot base frame**; the buffer is detected.
 - Targets are object poses in **buffer coordinates**, or free buffer cells with

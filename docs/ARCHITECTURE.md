@@ -9,7 +9,7 @@ and `buffer` live directly under `src/`. The application entry point is
 | Area | Current state |
 | --- | --- |
 | Physical data | Identity, dimensions, copied observed poses, named frames and timestamps. |
-| Cube | 40 x 40 x 20 mm, centered 38 mm top marker, DICT_ARUCO_ORIGINAL ID 27, aligned marker/cube edges. |
+| Cube | 40 x 40 x 20 mm, centered 40 mm top marker, DICT_ARUCO_ORIGINAL ID 5, aligned marker/cube edges. |
 | Grasp geometry | Explicit object/tool transforms or a downward top grasp from a measured tool offset. |
 | Targets | Buffer-relative poses and one-cell placements using object dimensions and a supplied floor height. |
 | Planning | Pick/place endpoints; CUDA cuRobo IK with configured joint bounds and arm self-collision; no scene/path collision planner or grasp search. |
