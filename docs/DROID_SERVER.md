@@ -90,8 +90,10 @@ selected. There is no CPU or remote-IK fallback.
 CUDA Graph capture is disabled by default (`ik.use_cuda_graph=false`); the
 solver still runs on CUDA. This avoids graph-capture invalidation at startup.
 
-Reset planning solves all endpoint joint targets before sending any arm or
-gripper command. Each move retains both its Cartesian pose and seven joint
+Reset planning solves all endpoint joint targets for each stage before sending
+that stage's arm or gripper commands. Camera-observed cubes first get a close-up
+scan stage; after the new observation, all transfer endpoints are solved before
+pickup. Each move retains both its Cartesian pose and seven joint
 angles. `ik_solved` events record joint targets, pose errors and minimum
 distance from the effective joint bounds. A failed solve aborts planning.
 

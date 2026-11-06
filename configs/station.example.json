@@ -91,6 +91,8 @@
     }
   ],
   "reset": {
+    "rescan_before_pick": true,
+    "scan_distance_m": 0.25,
     "transit_height_m": 0.4,
     "lift_clearance_m": 0.08,
     "position_tolerance_m": 0.01,

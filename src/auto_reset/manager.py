@@ -105,7 +105,7 @@ class ResetManager:
 
     def observe(self, observations: Mapping[str, np.ndarray] | None = None, *,
                 timestamp: float | None = None, detect_buffer: bool = False,
-                detect_objects: bool = False) -> dict:
+                detect_objects: bool = False, object_ids: tuple[str, ...] | None = None) -> dict:
         """Accept supplied poses or capture cube markers with the shared detector.
 
         In an explicit observation batch, omitted task objects become unobserved.
@@ -118,18 +118,22 @@ class ResetManager:
         """
         if detect_objects and observations is not None:
             raise ValueError("Choose camera object detection or supplied object poses")
+        if object_ids is not None and not detect_objects:
+            raise ValueError("object_ids selects objects for camera detection only")
+        selected = self.objects if object_ids is None else {key: self.objects[key] for key in object_ids}
         if detect_objects:
             if self._state["phase"] in ("planning", "executing"):
                 raise RuntimeError("Cannot replace observations during reset execution")
             if self.camera is None or self.robot is None or self.station_config is None:
                 raise ValueError("Object detection needs the station camera, robot connection and configuration")
-            for obj in self.objects.values():
+            for obj in selected.values():
                 obj.mark_unobserved()
             self._state.pop("last_observation", None)
         checked = {}
         if observations is not None:
             if self._state["phase"] in ("planning", "executing"):
                 raise RuntimeError("Cannot replace observations during reset execution")
+            self._state.pop("last_observation", None)
             timestamp = time.time() if timestamp is None else float(timestamp)
             if not math.isfinite(timestamp):
                 raise ValueError("Observation timestamp must be finite")
@@ -197,9 +201,10 @@ class ResetManager:
                                  datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ"))
                     observations, report = localize_cubes(
                         frames, self.aruco_detector, config.aruco_dictionary_names,
-                        self.objects, base_tool @ tool_left, directory,
+                        selected, base_tool @ tool_left, directory,
                         review=config.camera.get("review_capture", False),
                     )
+                    report["tool_left_camera"] = tool_left.tolist()
                     self._state["last_observation"] = report
                     self._record("objects_detected", **report)
                     if observations is not None:
@@ -210,7 +215,7 @@ class ResetManager:
                 self._record("object_detection_failed", reason=str(exc) or type(exc).__name__)
                 raise
         if observations is not None:
-            for key, scene_object in self.objects.items():
+            for key, scene_object in selected.items():
                 if key not in checked:
                     scene_object.mark_unobserved()
             for key, pose in checked.items():
@@ -222,8 +227,9 @@ class ResetManager:
                 for key, obj in {self.buffer.object_id: self.buffer, **self.objects}.items()}
 
     def plan(self, target_configuration: TargetConfiguration, *,
-             current_tool_pose: np.ndarray | None = None, solve_ik: bool = False) -> ResetPlan:
-        """Build a complete plan before execution; supplied tool pose allows offline use."""
+             current_tool_pose: np.ndarray | None = None, solve_ik: bool = False,
+             rescan_objects: bool | None = None) -> ResetPlan:
+        """Plan the next scan or transfer stage; supplied tool pose allows offline use."""
         if target_configuration.buffer_id != self.buffer.object_id:
             raise ValueError("Target configuration belongs to a different buffer")
         if not target_configuration.poses:
@@ -236,8 +242,26 @@ class ResetManager:
             if self.robot is None:
                 raise ValueError("Offline planning needs current_tool_pose")
             current_tool_pose = self.robot.read_state().tool_pose
+        report = self._state.get("last_observation")
+        options = {} if self.station_config is None else self.station_config.data.get("reset", {})
+        if rescan_objects is None:
+            rescan_objects = report is not None and options.get("rescan_before_pick", True)
+        scan_options = {}
+        if rescan_objects:
+            if report is None:
+                raise ValueError("Close-up scanning needs an initial camera observation")
+            mount = report.get("tool_left_camera")
+            if mount is None:
+                raise ValueError("Initial camera observation does not contain its camera mounting transform")
+            right = report["eyes"].get("right")
+            if right is not None and right.get("left_camera_eye") is None:
+                raise ValueError("Stereo scanning needs the measured right-eye transform")
+            scan_options = {"tool_left_camera": transform(mount),
+                            "left_right_camera": None if right is None else right["left_camera_eye"],
+                            "scan_distance_m": options.get("scan_distance_m", 0.25)}
         actions = self.planner.plan(self.objects, target_configuration,
-                                    buffer_pose=self.buffer.pose, current_tool_pose=current_tool_pose)
+                                    buffer_pose=self.buffer.pose, current_tool_pose=current_tool_pose,
+                                    **scan_options)
         if solve_ik and self.robot is None:
             raise ValueError("Joint planning needs a robot backend with local cuRobo IK")
         seed = self.robot.read_state().joints if solve_ik else None
@@ -259,8 +283,8 @@ class ResetManager:
                                  **self.robot.last_ik)
         return actions
 
-    def reset(self, target_configuration: TargetConfiguration) -> None:
-        """Plan/execute once; retain unknown success until final poses are verified."""
+    def reset(self, target_configuration: TargetConfiguration, *, rescan_objects: bool | None = None) -> None:
+        """Rescan camera-observed cubes before transfers; verify final poses separately."""
         if not self._run_lock.acquire(blocking=False):
             raise RuntimeError("A reset is already executing")
         try:
@@ -277,14 +301,29 @@ class ResetManager:
             try:
                 self._record("reset_started", scene=self._state["scene_before"],
                              targets={key: value.tolist() for key, value in self.target_configuration.poses.items()})
-                actions = self.plan(self.target_configuration, solve_ik=True)
-                self._record("plan_created", actions=actions)
-                self._state["phase"] = "executing"
-                # Once execution begins, the supplied pickup poses cannot describe
-                # the resulting scene. Never substitute commanded targets for measurements.
-                for object_id in self.target_configuration.poses:
-                    self.objects[object_id].mark_unobserved()
-                self._execute(actions)
+                options = {} if self.station_config is None else self.station_config.data.get("reset", {})
+                if rescan_objects is None:
+                    rescan_objects = (self._state.get("last_observation") is not None
+                                      and options.get("rescan_before_pick", True))
+                batches = ([TargetConfiguration(buffer_id=self.target_configuration.buffer_id,
+                                                poses={key: pose})
+                            for key, pose in self.target_configuration.poses.items()]
+                           if rescan_objects else [self.target_configuration])
+                for batch in batches:
+                    self._state["phase"] = "planning"
+                    actions = self.plan(batch, solve_ik=True, rescan_objects=rescan_objects)
+                    self._record("plan_created", stage="scan" if rescan_objects else "transfer", actions=actions)
+                    if rescan_objects:
+                        self._state["phase"] = "executing"
+                        self._execute(actions)
+                        self._state["phase"] = "planning"
+                        actions = self.plan(batch, solve_ik=True, rescan_objects=False)
+                        self._record("plan_created", stage="transfer", actions=actions)
+                    self._state["phase"] = "executing"
+                    # Commanded targets never substitute for scene measurements.
+                    for object_id in batch.poses:
+                        self.objects[object_id].mark_unobserved()
+                    self._execute(actions)
                 self._state.update(phase="awaiting_verification", current_action=None)
                 self._record("awaiting_verification")
             except (Exception, KeyboardInterrupt) as exc:
@@ -317,6 +356,25 @@ class ResetManager:
                 self.robot.open_gripper()
             elif kind == "close_gripper":
                 self.robot.close_gripper()
+            elif kind == "rescan_object":
+                object_id = action["object_id"]
+                obj = self.objects[object_id]
+                coarse_pose = None if obj.pose is None else obj.pose.copy()
+                coarse_timestamp = obj.observed_at
+                self._state["phase"] = "observing"
+                try:
+                    self.observe(detect_objects=True, object_ids=(object_id,))
+                finally:
+                    self._state["phase"] = "executing"
+                if obj.pose is None:
+                    if coarse_pose is None:
+                        raise ValueError(f"No close-up or coarse pose available for {object_id}")
+                    obj.update_pose(coarse_pose, "base", coarse_timestamp)
+                    print(f"Warning: close-up could not localize {object_id}; using its coarse pose", flush=True)
+                    self._record("object_rescan_fallback", object_id=object_id, pose=coarse_pose.tolist(),
+                                 reason=self._state.get("last_observation", {}).get("objects", {}).get(object_id))
+                else:
+                    self._record("object_pose_refined", object_id=object_id, pose=obj.pose.tolist())
             else:
                 raise ValueError(f"Unknown reset action: {kind}")
             self._record("action_finished", index=index, name=action["name"])

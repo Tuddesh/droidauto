@@ -12,7 +12,7 @@ pose and source image; subsequent resets reuse that fixed pose.
 ## Current behavior
 
 - Cube: **40 x 40 x 20 mm**, centered **38 mm** top marker,
-  **DICT_ARUCO_ORIGINAL / ID 27**, aligned with the cube edges. Origin is the geometric center.
+  **DICT_ARUCO_ORIGINAL / ID 5**, aligned with the cube edges. Origin is the geometric center.
 - Camera and supplied object observations use the **robot base frame**; the buffer is detected.
 - Targets are object poses in **buffer coordinates**, or free buffer cells with
   an explicit support-plane height.
@@ -97,6 +97,14 @@ and `--execute` to perform the transfer.
 
 `python -m auto_reset --detect-objects --review-buffer` instead detects the real
 cube, shows frozen scan images and plans its transfer. Add `--execute` to move.
+Camera-based execution first approaches a scan pose 250 mm from the top marker,
+centered between the stereo cameras and looking down using the measured camera
+mount. It captures/reviews a close-up, then replans the transfer from that pose
+estimate. A plan preview ends at the rescan action; pickup coordinates follow
+the new observation. `reset.scan_distance_m` sets the distance;
+`reset.rescan_before_pick=false` disables this stage. Supplied/dummy poses skip it.
+If the close-up cannot localize the cube, the transfer uses its coarse pose and
+logs a warning.
 
 For persistent manager state, omit `--request` and send one JSON request per
 stdin line. `--execute` enables the robot connection and `reset` requests:

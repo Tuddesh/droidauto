@@ -64,6 +64,12 @@ orientation additionally needs known marker mounting yaw. Object-marker
 detection uses the shared detector through `ResetManager.observe(detect_objects=True)`;
 buffer poses remain fitted by the existing Buffer methods. Cube pose fitting
 jointly minimizes corner reprojection error over the available stereo eyes.
+For camera-based resets, the planner first generates lift/transit/scan endpoints
+with the optical axes down and the top marker 250 mm ahead of the stereo
+midpoint. The measured camera-to-tool mount determines the flange pose. The
+manager captures a fresh observation there and replans the transfer. An unusable
+close-up falls back to the coarse pose with a logged warning. Supplied-pose
+resets keep the direct transfer path.
 
 ## Reset lifecycle
 
@@ -74,7 +80,7 @@ camera/supplied object poses + detected/cached buffer → planning → executing
 ```
 
 Exceptions produce `failed`; a cooperative cancellation produces `cancelled`.
-Old task-object poses are invalidated when execution starts. Completing motion
+Pickup poses are invalidated when their transfer starts. Completing motion
 does not establish placement success. Final measurements are required for a
 verified outcome; no localization output is synthesized from commanded poses.
 State is held in memory for the process lifetime; JSONL logs retain events.

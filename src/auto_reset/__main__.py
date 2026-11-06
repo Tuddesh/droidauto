@@ -47,7 +47,8 @@ def handle_request(manager, config, request, *, execute=False):
             if operation == "plan":
                 current = request.get("current_tool_pose")
                 actions = manager.plan(target, current_tool_pose=None if current is None else config.read_pose(current),
-                                       solve_ik=request.get("solve_ik", False))
+                                       solve_ik=request.get("solve_ik", False),
+                                       rescan_objects=request.get("rescan_objects"))
                 return {"actions": actions, "state": dict(manager.state)}
             print(f"Pickup coordinate source: {source}", file=sys.stderr, flush=True)
             for object_id in target.poses:
@@ -55,7 +56,7 @@ def handle_request(manager, config, request, *, execute=False):
                 if obj.pose is not None:
                     print(f"{object_id} pickup cube center in base (m): {obj.pose[:3, 3].tolist()}",
                           file=sys.stderr, flush=True)
-            manager.reset(target)
+            manager.reset(target, rescan_objects=request.get("rescan_objects"))
     response = {"state": dict(manager.state)}
     if operation == "observe":
         response["observations"] = manager.observe()
