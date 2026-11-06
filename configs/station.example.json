@@ -1,5 +1,5 @@
 {
-  "description": "Reset station with a 169 mm flange-to-grasp-center offset and 178 mm closed-fingertip reach. Scene poses, support height and transit settings are illustrative.",
+  "description": "Reset station with a 165 mm flange-to-grasp-center offset and 178 mm closed-fingertip reach. Scene poses, support height and transit settings are illustrative.",
   "robot_endpoint": "tcp://192.168.88.12:4242",
   "calibration_file": "../runs/calibration/buffer.json",
   "log_directory": "../runs/reset",
@@ -84,7 +84,7 @@
       },
       "grasps": [],
       "manipulation": {
-        "tool_to_grasp_m": 0.169,
+        "tool_to_grasp_m": 0.165,
         "grasp_center_z_m": 0.0,
         "grasp_yaw_rad": 0.0
       }

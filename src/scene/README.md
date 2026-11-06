@@ -56,10 +56,10 @@ An explicit `grasps` list of T_cube_tool matrices (or six-value poses in station
 JSON) overrides generated top grasps. Otherwise configure:
 
 ```json
-{"manipulation":{"tool_to_grasp_m":0.169,"grasp_center_z_m":0.0,"grasp_yaw_rad":0.0}}
+{"manipulation":{"tool_to_grasp_m":0.165,"grasp_center_z_m":0.0,"grasp_yaw_rad":0.0}}
 ```
 
-The grasp center is **169 mm** along tool +Z from the flange. With
+The grasp center is **165 mm** along tool +Z from the flange. With
 `grasp_center_z_m=0`, it targets the cube center. The closed fingertips extend
 to **178 mm** and are used separately for height clipping. Grasp yaw is
 configured relative to the cube; the current example uses 0 degrees.

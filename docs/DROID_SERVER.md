@@ -70,8 +70,8 @@ Cartesian targets are clipped so the closed fingertips stay at base Z >= -0.025 
 using the measured 178 mm flange offset. Clipping emits a warning and reset
 logs record the applied endpoint. XY and orientation are preserved. This limits
 endpoints; joint-space paths and arbitrary direct joint commands are not constrained.
-The cube grasp center is separately configured 169 mm along flange +Z; it is
-9 mm closer to the flange than the closed fingertips.
+The cube grasp center is separately configured 165 mm along flange +Z; it is
+13 mm closer to the flange than the closed fingertips.
 
 `joint_target_for_pose()` uses local cuRobo V2 on the station's NVIDIA GPU.
 The target is `panda_link8`, the same flange frame DROID reports. The stock
