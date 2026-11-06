@@ -86,7 +86,9 @@ verified outcome; no localization output is synthesized from commanded poses.
 State is held in memory for the process lifetime; JSONL logs retain events.
 The JSON-lines process should remain running between reset and verification.
 
-The planner assumes a clear transit corridor. It sends endpoints without dense
-interpolation or intermediate positional-error checks; DROID joint-space moves
+The planner assumes a clear transit corridor. Placement samples the last 100 mm
+along the buffer normal at 10 mm intervals with fixed orientation and the same
+final target. Other moves use endpoints without interpolation. There are no
+intermediate positional-error checks; DROID joint-space moves
 are not guaranteed to follow straight Cartesian segments. Neither collision
 avoidance nor recovery from an emergency-stopped server is implemented.
