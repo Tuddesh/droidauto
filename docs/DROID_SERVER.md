@@ -66,7 +66,8 @@ manual-capture age/stationarity gates; the operator establishes stationarity.
 The backend validates the list's shape/numeric values. Local IK additionally
 uses the station's explicit `ik` joint bounds, intersected with its robot model.
 
-Cartesian targets are clipped so the closed fingertips stay at base Z >= -0.025 m,
+Cartesian targets are clipped so the closed fingertips stay at base Z >= -0.038 m
+(2 mm above the measured table at base Z = -0.040 m),
 using the measured 178 mm flange offset. Clipping emits a warning and reset
 logs record the applied endpoint. XY and orientation are preserved. This limits
 endpoints; joint-space paths and arbitrary direct joint commands are not constrained.

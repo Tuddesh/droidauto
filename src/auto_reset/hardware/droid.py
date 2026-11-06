@@ -15,7 +15,7 @@ from scene.transforms import pose_to_transform, transform
 
 
 LOG = logging.getLogger(__name__)
-MIN_FINGERTIP_BASE_Z_M = -0.025
+MIN_FINGERTIP_BASE_Z_M = -0.038  # 2 mm above the table at base Z = -0.040 m.
 FLANGE_TO_CLOSED_FINGERTIP_M = 0.178
 GRIPPER_SETTLE_S = 2.5
 
@@ -190,7 +190,7 @@ class DroidRobot:
 
     @staticmethod
     def _clip_cartesian_target(target) -> np.ndarray:
-        """Raise a flange target to keep the closed fingertips at Z >= -25 mm.
+        """Raise a flange target to keep the closed fingertips at Z >= -38 mm.
 
         The closed fingertips are 178 mm along flange +Z. Only base-frame Z is
         changed; XY and orientation are preserved. This constrains endpoints,
