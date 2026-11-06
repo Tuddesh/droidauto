@@ -76,7 +76,7 @@ cp configs/reset.example.json configs/reset.local.json
 ```
 
 The numeric example poses/transit settings are illustrative. The configured
-`objects[].manipulation.tool_to_grasp_m` is **0.165 m** from the flange
+`objects[].manipulation.tool_to_grasp_m` is **0.167 m** from the flange
 (`panda_link8`, DROID's configured tool frame) to the grasp center. The grasp
 center targets the cube center by default (`grasp_center_z_m=0`). Height clipping
 separately uses the **0.178 m** closed-fingertip reach.
