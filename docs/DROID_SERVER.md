@@ -122,8 +122,10 @@ comparing the tool pose to the requested endpoint. Gripper methods call
 
 `src/auto_reset/hardware/zed.py` provides `ZedWristCamera` and `CameraFrame`.
 It captures rectified left/right images at HD720 (1280 x 720 per eye) and
-15 FPS with matching intrinsics. The reset manager opens it for initial buffer
-detection or an explicit rescan. Object poses are supplied directly. Stereo eyes
+15 FPS with matching intrinsics. The station opens one camera session during
+initialization and reuses it for buffer scans, cube detection and retakes. The
+station closes it on shutdown, including error exits. One-shot requests using
+supplied poses and a saved buffer calibration do not need a camera session. Stereo eyes
 share one SDK grab and timestamp. The SDK rectified stereo transform supplies
 the right optical frame relative to the left in IMAGE coordinates/metres.
 

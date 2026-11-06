@@ -20,7 +20,7 @@ class CameraFrame:
 
 
 class ZedWristCamera:
-    """The lab PC needs the installed ZED SDK's Python bindings in its own env."""
+    """One SDK session per station lifetime; captures reuse the open camera."""
 
     def __init__(self, serial: str, view: str = "left", auto_exposure_roi=None):
         if view not in ("left", "right", "stereo"):
@@ -35,6 +35,8 @@ class ZedWristCamera:
         self._exposure_warning_reported = False
 
     def __enter__(self):
+        if self._camera is not None:
+            return self
         try:
             import pyzed.sl as sl
         except ImportError as exc:
@@ -235,3 +237,5 @@ class ZedWristCamera:
         if self._camera is not None:
             self._camera.close()
             self._camera = None
+        self._exposure_frames.clear()
+        self._needs_exposure_settle = True

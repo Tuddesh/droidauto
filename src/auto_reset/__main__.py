@@ -105,9 +105,18 @@ def main():
         calibration_path = config.resolve(config.data["calibration_file"])
         calibration = (BufferCalibration.load(calibration_path)
                        if calibration_path.exists() and not args.scan_buffer else None)
-        camera = (ZedWristCamera(str(config.camera["serial"]), config.camera["view"],
-                                auto_exposure_roi=config.camera.get("auto_exposure_roi"))
-                  if config.camera else None)
+        camera = None
+        needs_camera = (
+            args.scan_buffer or request is None or request.get("detect_objects", False)
+            or (request.get("operation") == "observe" and "observations" not in request)
+            or (calibration is None and request.get("operation", "plan") in ("observe", "plan", "reset"))
+        )
+        if config.camera and needs_camera:
+            with redirect_stdout(sys.stderr):
+                camera = stack.enter_context(ZedWristCamera(
+                    str(config.camera["serial"]), config.camera["view"],
+                    auto_exposure_roi=config.camera.get("auto_exposure_roi"),
+                ))
         manager = ResetManager(buffer=config.make_buffer(), robot=robot,
                                camera=camera, station_config=config, calibration=calibration,
                                planner=config.make_planner(), objects=config.make_objects(), log=log,

@@ -64,8 +64,10 @@ An interrupted transfer performs no automatic gripper opening or recovery.
 and detects the buffer if it has no known pose. Supplied buffer poses are
 rejected. Omitted task objects become unobserved; the fixed buffer pose is
 retained. `observe(detect_buffer=True)` explicitly rescans. Capture uses the
-existing Buffer detector, saves the calibration/source image, and releases the
-camera. Calling `observe()` without arguments returns a snapshot.
+existing Buffer detector and saves the calibration/source image. The station
+owns one open camera session; buffer and cube observations reuse it until
+shutdown. Python callers likewise pass an already-open camera to the manager.
+Calling `observe()` without arguments returns a snapshot.
 
 `observe(detect_objects=True)` captures the configured cube markers and converts
 their poses through the measured camera mount into robot-base cube-center poses.

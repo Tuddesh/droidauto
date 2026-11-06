@@ -114,6 +114,7 @@ class ResetManager:
         Calling without arguments returns the current snapshot without capture.
         detect_objects=True captures current cube poses; missing cubes become
         unobserved. Scan diagnostics are retained in state['last_observation'].
+        The caller owns one open camera session for the manager's lifetime.
         """
         if detect_objects and observations is not None:
             raise ValueError("Choose camera object detection or supplied object poses")
@@ -151,9 +152,9 @@ class ResetManager:
             # Automatic base-frame composition needs live feedback around the
             # capture; a frozen pre-stop pose must not become a new calibration.
             self.robot.read_state()
-            with self.camera as camera:
-                calibration = capture_calibration(self.station_config, self.robot, camera,
-                                                  review=self.station_config.camera.get("review_capture", False))
+            self.camera.set_auto_exposure_roi(self.station_config.camera.get("auto_exposure_roi"))
+            calibration = capture_calibration(self.station_config, self.robot, self.camera,
+                                              review=self.station_config.camera.get("review_capture", False))
             self.robot.read_state()
             path = self.station_config.resolve(self.station_config.data["calibration_file"])
             calibration.save(path)
@@ -169,42 +170,42 @@ class ResetManager:
             config = self.station_config
             self._record("object_detection_started")
             try:
-                with self.camera as camera:
-                    camera.set_auto_exposure_roi(config.camera.get("auto_exposure_roi"))
-                    while True:
-                        self.robot.read_state()
-                        frames = camera.capture_pair() if camera.view == "stereo" else [camera.capture()]
-                        if not frames or any(frame.serial != str(config.camera["serial"]) for frame in frames):
-                            raise ValueError("Object scan does not match the configured camera")
-                        base_tool = self.robot.read_state().tool_pose
-                        if "tool_left_camera_pose" in config.camera:
-                            tool_left = pose_to_transform(config.camera["tool_left_camera_pose"])
-                        elif self.calibration is not None and "tool_left_camera" in self.calibration.record:
-                            tool_left = transform(self.calibration.record["tool_left_camera"])
-                        else:
-                            try:
-                                tool_left = load_hand_eye(config.resolve(config.camera["hand_eye_file"]),
-                                                          frames[0].serial, "left")
-                            except (ValueError, OSError, KeyError):
-                                right = next((frame for frame in frames if frame.view == "right"), None)
-                                if right is None or right.left_camera_eye is None:
-                                    raise
-                                tool_right = load_hand_eye(config.resolve(config.camera["hand_eye_file"]),
-                                                           right.serial, "right")
-                                tool_left = tool_right @ np.linalg.inv(transform(right.left_camera_eye))
-                        directory = (config.resolve(config.data["log_directory"]) / "object_scans" /
-                                     datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ"))
-                        observations, report = localize_cubes(
-                            frames, self.aruco_detector, config.aruco_dictionary_names,
-                            self.objects, base_tool @ tool_left, directory,
-                            review=config.camera.get("review_capture", False),
-                        )
-                        self._state["last_observation"] = report
-                        self._record("objects_detected", **report)
-                        if observations is not None:
-                            timestamp = time.time()
-                            checked = {key: transform(value) for key, value in observations.items()}
-                            break
+                camera = self.camera
+                camera.set_auto_exposure_roi(config.camera.get("auto_exposure_roi"))
+                while True:
+                    self.robot.read_state()
+                    frames = camera.capture_pair() if camera.view == "stereo" else [camera.capture()]
+                    if not frames or any(frame.serial != str(config.camera["serial"]) for frame in frames):
+                        raise ValueError("Object scan does not match the configured camera")
+                    base_tool = self.robot.read_state().tool_pose
+                    if "tool_left_camera_pose" in config.camera:
+                        tool_left = pose_to_transform(config.camera["tool_left_camera_pose"])
+                    elif self.calibration is not None and "tool_left_camera" in self.calibration.record:
+                        tool_left = transform(self.calibration.record["tool_left_camera"])
+                    else:
+                        try:
+                            tool_left = load_hand_eye(config.resolve(config.camera["hand_eye_file"]),
+                                                      frames[0].serial, "left")
+                        except (ValueError, OSError, KeyError):
+                            right = next((frame for frame in frames if frame.view == "right"), None)
+                            if right is None or right.left_camera_eye is None:
+                                raise
+                            tool_right = load_hand_eye(config.resolve(config.camera["hand_eye_file"]),
+                                                       right.serial, "right")
+                            tool_left = tool_right @ np.linalg.inv(transform(right.left_camera_eye))
+                    directory = (config.resolve(config.data["log_directory"]) / "object_scans" /
+                                 datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ"))
+                    observations, report = localize_cubes(
+                        frames, self.aruco_detector, config.aruco_dictionary_names,
+                        self.objects, base_tool @ tool_left, directory,
+                        review=config.camera.get("review_capture", False),
+                    )
+                    self._state["last_observation"] = report
+                    self._record("objects_detected", **report)
+                    if observations is not None:
+                        timestamp = time.time()
+                        checked = {key: transform(value) for key, value in observations.items()}
+                        break
             except (Exception, KeyboardInterrupt) as exc:
                 self._record("object_detection_failed", reason=str(exc) or type(exc).__name__)
                 raise
