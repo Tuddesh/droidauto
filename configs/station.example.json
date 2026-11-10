@@ -105,8 +105,6 @@
     }
   ],
   "reset": {
-    "place_approach_m": 0.10,
-    "place_step_m": 0.01,
     "rescan_before_pick": true,
     "scan_distance_m": 0.25,
     "transit_height_m": 0.4,

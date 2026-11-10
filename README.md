@@ -18,10 +18,8 @@ pose and source image; subsequent resets reuse that fixed pose.
   an explicit support-plane height.
 - Configured grasps are **T_object_tool**, using DROID's actual reported tool
   frame. A top-grasp helper accepts a measured tool-to-gripping-point offset.
-- Planning creates lift/transit/pick/place/gripper endpoints. The final 100 mm
-  placement approach follows the buffer normal at 10 mm intervals, keeping the
-  placement orientation and final height. There is no client-side positional-error
-  gate. cuRobo solves endpoint IK
+- Planning creates lift/transit/pick/place/gripper endpoints. There is no dense
+  interpolation or client-side positional-error gate. cuRobo solves endpoint IK
   on the local CUDA GPU; DROID executes the resulting joint targets. The client
   waits for joint motion to settle before sending another endpoint.
 - After execution, state is `awaiting_verification`, with `success: null`.
@@ -49,6 +47,7 @@ droidauto/
 ├── scripts/                  Interactive manual hardware tools
 ├── configs/                  Examples; local JSON ignored
 ├── docs/                     Current state and interfaces
+├── third_party/alignpose_project/  AlignPose submodule (custom-objects)
 ├── Dockerfile
 ├── environment.yml
 └── pyproject.toml
@@ -59,6 +58,12 @@ droidauto/
 Existing local experiments, datasets, captures and environments are ignored.
 
 ## Installation
+
+Initialize the AlignPose source submodule after cloning:
+
+```bash
+git submodule update --init third_party/alignpose_project
+```
 
 ```bash
 conda env create -p ./.conda -f environment.yml

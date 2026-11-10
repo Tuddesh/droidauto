@@ -1,0 +1,4 @@
+[submodule "third_party/alignpose_project"]
+	path = third_party/alignpose_project
+	url = https://github.com/mikestikova/alignpose_project.git
+	branch = custom-objects

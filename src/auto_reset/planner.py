@@ -3,9 +3,8 @@
 The planner composes camera/tool mounts and object grasps into scan or transfer
 waypoints. A scan ends at an observation action; pickup is replanned afterwards
 from the refined pose. Poses are in robot-base coordinates. It does not run IK,
-perform collision avoidance. The final placement approach is sampled along the
-buffer normal; other moves remain endpoints. The corridor must be clear and
-DROID executes each joint-space segment.
+interpolate trajectories or perform collision avoidance; the transit corridor
+must be clear and DROID executes each endpoint.
 """
 
 from __future__ import annotations
@@ -25,19 +24,13 @@ ResetPlan = list[dict[str, object]]
 class ResetPlanner:
     """Build ordered endpoint actions; ResetManager owns their execution."""
 
-    def __init__(self, *, transit_height_m: float, lift_clearance_m: float = 0.08,
-                 place_approach_m: float = 0.10, place_step_m: float = 0.01):
+    def __init__(self, *, transit_height_m: float, lift_clearance_m: float = 0.08):
         if not math.isfinite(transit_height_m):
             raise ValueError("Transit height must be finite (absolute robot-base Z)")
         if not math.isfinite(lift_clearance_m) or lift_clearance_m <= 0:
             raise ValueError("Lift clearance must be positive")
         self.transit_height_m = float(transit_height_m)
         self.lift_clearance_m = float(lift_clearance_m)
-        if (not np.isfinite([place_approach_m, place_step_m]).all()
-                or place_approach_m < 0 or place_step_m <= 0):
-            raise ValueError("Placement approach must be nonnegative and step must be positive")
-        self.place_approach_m = float(place_approach_m)
-        self.place_step_m = float(place_step_m)
 
     def plan(self, objects: Mapping[str, SceneObject], target_configuration: TargetConfiguration,
              *, buffer_pose: np.ndarray, current_tool_pose: np.ndarray,
@@ -104,15 +97,10 @@ class ResetPlanner:
                                "object_id": scene_object.object_id, "scan_distance_m": scan_distance_m}]
         grasp = scene_object.grasp_poses()[grasp_index]
         source = transform(scene_object.pose) @ grasp
-        target_pose = transform(target_pose)
-        destination = target_pose @ grasp
-        normal = target_pose[:3, 2]
-        approach = destination.copy()
-        approach[:3, 3] += normal * self.place_approach_m
+        destination = transform(target_pose) @ grasp
         height = max(self.transit_height_m, float(current[2, 3]),
                      float(source[2, 3]) + self.lift_clearance_m,
-                     float(destination[2, 3]) + self.lift_clearance_m,
-                     float(approach[2, 3]))
+                     float(destination[2, 3]) + self.lift_clearance_m)
 
         def above(pose):
             result = pose.copy()
@@ -126,15 +114,8 @@ class ResetPlanner:
         def gripper(kind):
             return {"type": kind, "name": kind, "object_id": scene_object.object_id}
 
-        descent = []
-        steps = math.ceil(self.place_approach_m / self.place_step_m)
-        for index in range(steps, 0, -1):
-            pose = destination.copy()
-            pose[:3, 3] += normal * (self.place_approach_m * index / steps)
-            name = "place_approach" if index == steps else f"place_descent_{steps - index:02d}"
-            descent.append(move(name, pose))
         return [move("initial_lift", above(current)), gripper("open_gripper"),
                 move("above_pick", above(source)), move("pick", source),
                 gripper("close_gripper"), move("lift", above(source)),
-                move("above_place", above(approach)), *descent, move("place", destination),
+                move("above_place", above(destination)), move("place", destination),
                 gripper("open_gripper"), move("retreat", above(destination))]

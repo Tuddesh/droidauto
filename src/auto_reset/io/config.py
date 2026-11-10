@@ -125,9 +125,7 @@ class StationConfig:
         from auto_reset import ResetPlanner
         options = self.data["reset"]
         return ResetPlanner(transit_height_m=options["transit_height_m"],
-                            lift_clearance_m=options.get("lift_clearance_m", 0.08),
-                            place_approach_m=options.get("place_approach_m", 0.10),
-                            place_step_m=options.get("place_step_m", 0.01))
+                            lift_clearance_m=options.get("lift_clearance_m", 0.08))
 
     def make_target(self, placements, buffer, objects):
         """Resolve request targets given as buffer poses or cell placements."""
