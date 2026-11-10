@@ -44,7 +44,8 @@ Objects own physical data and grasp descriptions. `Buffer` owns grid geometry,
 fixtures and its independent localization methods. Desired placements belong
 to `TargetConfiguration`, separately from measured poses. `ResetPlanner`
 composes grasp/endpoints; `DroidRobot` solves IK locally with cuRobo on CUDA and
-delegates joint execution to DROID. All endpoint joints are solved before motion.
+delegates joint execution to DROID. Each stage's endpoint joints are solved
+before that stage begins moving.
 The manager owns sequencing, final verification and outcome state. No separate
 reset-result object or driver protocol hierarchy is needed. The `localize_cubes`
 image adapter handles marker fitting and diagnostics without owning hardware.
@@ -85,8 +86,19 @@ does not establish placement success. Final measurements are required for a
 verified outcome; no localization output is synthesized from commanded poses.
 State is held in memory for the process lifetime; JSONL logs retain events.
 The JSON-lines process should remain running between reset and verification.
+Camera-based reset requests capture a fresh overview inside the reset operation.
+Objects already within the final-placement tolerances are skipped and retain
+their observations; only objects with actual transfer actions are invalidated.
 
 The planner assumes a clear transit corridor. It sends endpoints without dense
 interpolation or intermediate positional-error checks; DROID joint-space moves
 are not guaranteed to follow straight Cartesian segments. Neither collision
 avoidance nor recovery from an emergency-stopped server is implemented.
+
+Collision-aware path planning is necessary before unattended resets. It must
+model the table, buffer walls/fixtures, Robotiq gripper, camera and carried object,
+and check the motion between waypoints as well as the endpoints. Endpoint IK,
+arm self-collision checks and fingertip-height clipping do not provide this.
+The joint paths sent to DROID must follow the paths checked by the planner.
+This requirement is deferred: no collision-planning implementation or scene
+collision configuration is provided.

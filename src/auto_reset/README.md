@@ -44,6 +44,9 @@ configured lift clearance. There is no scene collision model, trajectory optimiz
 client-side interpolation or positional-error gate. These are endpoints;
 DROID's joint-space trajectory between them need not be Cartesian-straight.
 The first configured grasp is selected; automatic grasp optimization is absent.
+The manager skips objects already within the configured final-placement
+tolerances. Their observations are retained. An all-correct scene sends no arm
+or gripper commands and still awaits explicit verification.
 
 Before execution, cuRobo solves all endpoint poses on the configured CUDA GPU,
 with the station's joint bounds and Panda arm self-collision model. Solutions
@@ -81,7 +84,11 @@ can be combined with object detection to refresh the buffer too.
 
 `manager.plan(target, current_tool_pose=...)` is offline; omit the tool pose to
 read it from a connected robot. `solve_ik=True` additionally needs measured
-starting joints and the configured local CUDA solver. `manager.reset(target)` reads the actual tool
+starting joints and the configured local CUDA solver.
+`manager.reset(target, detect_objects=True)` captures a fresh overview for each
+reset, then refines required pickups with close-ups. A missed close-up retains
+the coarse pose. `detect_objects=False` uses supplied observations;
+`detect_buffer=True` explicitly refreshes the buffer. The manager reads the actual tool
 pose, plans before sending commands, logs each action and invalidates moved
 objects' previous poses. It finishes at `awaiting_verification`, success unknown.
 

@@ -112,6 +112,9 @@ the new observation. `reset.scan_distance_m` sets the distance;
 `reset.rescan_before_pick=false` disables this stage. Supplied/dummy poses skip it.
 If the close-up cannot localize the cube, the transfer uses its coarse pose and
 logs a warning.
+Each camera-based reset captures a fresh overview. Objects already within the
+configured placement tolerances are skipped; explicit final verification is
+still required to establish success.
 
 For persistent manager state, omit `--request` and send one JSON request per
 stdin line. `--execute` enables the robot connection and `reset` requests:

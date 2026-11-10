@@ -229,7 +229,7 @@ class ResetManager:
     def plan(self, target_configuration: TargetConfiguration, *,
              current_tool_pose: np.ndarray | None = None, solve_ik: bool = False,
              rescan_objects: bool | None = None) -> ResetPlan:
-        """Plan the next scan or transfer stage; supplied tool pose allows offline use."""
+        """Skip placed objects and plan the next scan or transfer stage, optionally offline."""
         if target_configuration.buffer_id != self.buffer.object_id:
             raise ValueError("Target configuration belongs to a different buffer")
         if not target_configuration.poses:
@@ -238,6 +238,19 @@ class ResetManager:
             self.observe(detect_buffer=True)
         if self.buffer.pose is None or self.buffer.pose_frame != "base":
             raise ValueError("Buffer detection did not establish its base-frame pose")
+        pending = {}
+        for object_id, target in target_configuration.poses.items():
+            obj = self.objects[object_id]
+            if obj.pose is not None and obj.pose_frame == "base":
+                distance, angle = pose_error(obj.pose, self.buffer.pose @ target)
+                if distance <= self.position_tolerance_m and angle <= self.orientation_tolerance_rad:
+                    self._record("object_already_at_target", object_id=object_id,
+                                 position_m=distance, orientation_rad=angle)
+                    continue
+            pending[object_id] = target
+        if not pending:
+            return []
+        target_configuration = TargetConfiguration(buffer_id=target_configuration.buffer_id, poses=pending)
         if current_tool_pose is None:
             if self.robot is None:
                 raise ValueError("Offline planning needs current_tool_pose")
@@ -283,8 +296,14 @@ class ResetManager:
                                  **self.robot.last_ik)
         return actions
 
-    def reset(self, target_configuration: TargetConfiguration, *, rescan_objects: bool | None = None) -> None:
-        """Rescan camera-observed cubes before transfers; verify final poses separately."""
+    def reset(self, target_configuration: TargetConfiguration, *, rescan_objects: bool | None = None,
+              detect_objects: bool | None = None, detect_buffer: bool = False) -> None:
+        """Observe, select and transfer requested objects; verify final poses separately.
+
+        Camera-based resets capture a fresh overview for every request. Explicit
+        detect_objects=False uses supplied observations instead. Close-up scans
+        refine individual pickups; a missed close-up retains the coarse pose.
+        """
         if not self._run_lock.acquire(blocking=False):
             raise RuntimeError("A reset is already executing")
         try:
@@ -293,12 +312,23 @@ class ResetManager:
             self._cancel_requested.clear()
             if self._state["phase"] == "awaiting_verification":
                 self._record("verification_not_supplied", previous_scene=self._state["scene_before"])
+            if detect_objects is None:
+                detect_objects = self._state.get("last_observation") is not None
             self.target_configuration = deepcopy(target_configuration)
-            self._state.update(phase="planning", current_action=None, success=None,
-                               scene_before=self.observe(), scene_after=None,
+            self._state.update(phase="observing", current_action=None, success=None,
+                               scene_before=None, scene_after=None,
                                object_placement_errors={}, failure_reason=None,
                                timing={"started_s": time.time()})
             try:
+                if self.target_configuration.buffer_id != self.buffer.object_id:
+                    raise ValueError("Target configuration belongs to a different buffer")
+                if not self.target_configuration.poses:
+                    raise ValueError("A reset request needs at least one target")
+                if detect_objects or detect_buffer:
+                    self.observe(detect_objects=detect_objects, detect_buffer=detect_buffer,
+                                 object_ids=tuple(self.target_configuration.poses) if detect_objects else None)
+                self._state["scene_before"] = self.observe()
+                self._state["phase"] = "planning"
                 self._record("reset_started", scene=self._state["scene_before"],
                              targets={key: value.tolist() for key, value in self.target_configuration.poses.items()})
                 options = {} if self.station_config is None else self.station_config.data.get("reset", {})
@@ -313,6 +343,8 @@ class ResetManager:
                     self._state["phase"] = "planning"
                     actions = self.plan(batch, solve_ik=True, rescan_objects=rescan_objects)
                     self._record("plan_created", stage="scan" if rescan_objects else "transfer", actions=actions)
+                    if not actions:
+                        continue
                     if rescan_objects:
                         self._state["phase"] = "executing"
                         self._execute(actions)
@@ -321,7 +353,7 @@ class ResetManager:
                         self._record("plan_created", stage="transfer", actions=actions)
                     self._state["phase"] = "executing"
                     # Commanded targets never substitute for scene measurements.
-                    for object_id in batch.poses:
+                    for object_id in {action["object_id"] for action in actions if action["type"] == "move"}:
                         self.objects[object_id].mark_unobserved()
                     self._execute(actions)
                 self._state.update(phase="awaiting_verification", current_action=None)
