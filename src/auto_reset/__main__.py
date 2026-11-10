@@ -27,12 +27,8 @@ def handle_request(manager, config, request, *, execute=False):
         raise ValueError(f"Unknown operation: {operation}")
     if operation == "reset" and not execute:
         raise ValueError("Reset execution requires --execute")
-    detection_requested = request.get("detect_objects")
-    camera_reset = (operation == "reset" and "observations" not in request
-                    and (manager.state.get("last_observation") is not None
-                         if detection_requested is None else detection_requested))
     source = ("supplied" if "observations" in request else "camera"
-              if operation == "observe" or request.get("detect_objects") or camera_reset else "existing observations")
+              if operation == "observe" or request.get("detect_objects") else "existing observations")
     manager._record("request_received", operation=operation, object_pose_source=source,
                     detect_buffer=bool(request.get("detect_buffer", False)))
     if operation == "verify":
@@ -44,7 +40,7 @@ def handle_request(manager, config, request, *, execute=False):
                 raise ValueError("Choose detect_objects or supplied observations")
             manager.observe({key: config.read_pose(value) for key, value in request["observations"].items()},
                             timestamp=request.get("timestamp_s"))
-        elif operation != "reset" and (operation == "observe" or request.get("detect_objects")):
+        elif operation == "observe" or request.get("detect_objects"):
             manager.observe(detect_objects=True, detect_buffer=request.get("detect_buffer", False))
         if operation in ("plan", "reset"):
             target = config.make_target(request["targets"], manager.buffer, manager.objects)
@@ -55,15 +51,12 @@ def handle_request(manager, config, request, *, execute=False):
                                        rescan_objects=request.get("rescan_objects"))
                 return {"actions": actions, "state": dict(manager.state)}
             print(f"Pickup coordinate source: {source}", file=sys.stderr, flush=True)
-            if source != "camera":
-                for object_id in target.poses:
-                    obj = manager.objects[object_id]
-                    if obj.pose is not None:
-                        print(f"{object_id} pickup cube center in base (m): {obj.pose[:3, 3].tolist()}",
-                              file=sys.stderr, flush=True)
-            manager.reset(target, rescan_objects=request.get("rescan_objects"),
-                          detect_objects=False if "observations" in request else request.get("detect_objects"),
-                          detect_buffer=request.get("detect_buffer", False))
+            for object_id in target.poses:
+                obj = manager.objects[object_id]
+                if obj.pose is not None:
+                    print(f"{object_id} pickup cube center in base (m): {obj.pose[:3, 3].tolist()}",
+                          file=sys.stderr, flush=True)
+            manager.reset(target, rescan_objects=request.get("rescan_objects"))
     response = {"state": dict(manager.state)}
     if operation == "observe":
         response["observations"] = manager.observe()
