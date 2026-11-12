@@ -35,7 +35,7 @@ class PlacementExperiment:
     seed: int | None = None
 
     def run(self) -> dict:
-        """Stage, place once, rescan/evaluate, and repeat; preserve partial results."""
+        """Attempt each random staging and buffer placement once, then reobserve."""
         manager = self.manager
         if isinstance(self.runs, bool) or not isinstance(self.runs, int) or self.runs < 1:
             raise ValueError("Experiment runs must be a positive integer")
@@ -99,6 +99,7 @@ class PlacementExperiment:
             for trial in range(1, self.runs + 1):
                 if manager._cancel_requested.is_set():
                     raise ResetCancelled("Experiment cancelled before staging")
+                manager.observe(detect_objects=True, object_ids=(object_id,))
                 print(f"Trial {trial}/{self.runs}: finding a home-visible table staging pose...", flush=True)
                 geometry = manager.state["last_observation"]
                 base_left = np.asarray(geometry["base_left_camera"])
@@ -175,7 +176,9 @@ class PlacementExperiment:
                     break
                 if manager._cancel_requested.is_set():
                     raise ResetCancelled("Experiment cancelled before staging transfer")
-                manager.reset(stage)
+                print(f"Trial {trial}/{self.runs}: random table target base XYZ "
+                      f"[{x:.3f}, {y:.3f}, {table_z + h[2]:.3f}] m, yaw {np.degrees(yaw):.1f} deg; one transfer.", flush=True)
+                manager.reset(stage, use_current_observations=True, max_manipulations=1)
                 events.emit("staging_measured", trial=trial, scene=dict(manager.state)["scene_after"])
                 print(f"Trial {trial}/{self.runs}: rescanning buffer and cube before placement...", flush=True)
                 manager.observe(detect_buffer=True, detect_objects=True, object_ids=(object_id,))
