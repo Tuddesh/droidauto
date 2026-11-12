@@ -38,14 +38,15 @@ The floor height is relative to the marker plane; it is not assumed to be zero.
 Fixture-occupied cells and oversized rotated footprints are rejected.
 
 A transfer is: initial lift at current XY → open → above pickup → pickup →
-close → lift → above destination → place → open → retreat. Transit height is
+close → lift → above destination → place → open → retreat → return to the
+observation pose. Transit height is
 absolute base Z, raised as needed above pickup/place tool heights by the
 configured lift clearance. There is no scene collision model, trajectory optimizer,
 client-side interpolation or positional-error gate. These are endpoints;
 DROID's joint-space trajectory between them need not be Cartesian-straight.
 The first configured grasp is selected; automatic grasp optimization is absent.
 
-Before execution, cuRobo solves all endpoint poses on the configured CUDA GPU,
+Before each manipulation, cuRobo solves its endpoint poses on the configured CUDA GPU,
 with the station's joint bounds and Panda arm self-collision model. Solutions
 are selected near the preceding joint configuration and stored as seven joint
 angles per move. A failed solve prevents the entire command sequence from
@@ -81,17 +82,26 @@ can be combined with object detection to refresh the buffer too.
 
 `manager.plan(target, current_tool_pose=...)` is offline; omit the tool pose to
 read it from a connected robot. `solve_ik=True` additionally needs measured
-starting joints and the configured local CUDA solver. `manager.reset(target)` reads the actual tool
-pose, plans before sending commands, logs each action and invalidates moved
-objects' previous poses. It finishes at `awaiting_verification`, success unknown.
+starting joints and the configured local CUDA solver. `manager.reset(target)`
+scans all requested objects, compares measured poses with targets, and selects
+the first observed off-target object in target order. It executes one transfer,
+returns to the original observation pose, rescans all task objects, and chooses
+again. A failed placement or another displaced object therefore changes the
+next plan. Completion requires all requested objects to be observed within the
+configured tolerances. There is no fixed retry limit; `cancel()` or an exception
+stops the loop. Missing detections cause further observations rather than success.
+The existing station camera must stay open throughout. Supplied initial poses
+can seed the first decision with `use_current_observations=True`; they are never
+reused as the post-action measurement. The result is retained in manager state,
+including scene comparisons, observation count and completed manipulation count.
 
 `manager.verify({object_id: measured_final_pose, ...})` computes position error
 in metres and orientation error in radians against the requested placements.
 These tolerances assess the final reset result; they do not gate intermediate
 motion. Missing objects fail verification. The buffer is treated as fixed until
 an explicit rescan.
-Verification is optional: another reset may use fresh pickup observations,
-leaving the preceding result unverified in the log.
+This explicit verification API can reassess a completed reset; the feedback loop
+already compares fresh observations with the target after every manipulation.
 Any moved, failed or cancelled transfer requires fresh poses before replanning.
 
 ## JSON request entry point

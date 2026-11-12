@@ -2,7 +2,7 @@
 
 DroidAuto implements a reset operation: observe the scene and accept a target
 configuration, plan object transfers, execute them through DROID, and verify
-placements from separately supplied final measurements. VLA execution and
+placements from fresh observations after each manipulation. VLA execution and
 model evaluation orchestration are outside this project's implementation scope.
 
 Cube poses come from camera ArUco detection or supplied robot-base coordinates.
@@ -22,8 +22,11 @@ pose and source image; subsequent resets reuse that fixed pose.
   interpolation or client-side positional-error gate. cuRobo solves endpoint IK
   on the local CUDA GPU; DROID executes the resulting joint targets. The client
   waits for joint motion to settle before sending another endpoint.
-- After execution, state is `awaiting_verification`, with `success: null`.
-  Only supplied final measurements can establish success or failure.
+- Reset execution repeats scene observation, target comparison and one
+  pick-and-place action, returning to the observation pose after each action.
+  It completes only when a fresh measured scene meets all requested targets.
+  Off-target placements are replanned without a fixed retry limit; cancellation
+  and hardware/capture failures stop the operation.
 - Events, commands, errors and final placement deviations are logged as JSONL.
 
 This is a simple endpoint transfer planner, not collision-aware path planning.
@@ -113,6 +116,13 @@ the new observation. `reset.scan_distance_m` sets the distance;
 If the close-up cannot localize the cube, the transfer uses its coarse pose and
 logs a warning.
 
+To teach a target, arrange the scene and run `python scripts/teach_scene.py`.
+Enter a name, capture and review the frozen stereo images, then save. All selected
+objects must be detected; `--objects cube-1` selects a subset and `--scan-buffer`
+refreshes a moved buffer. Targets are buffer-relative and stored under ignored
+`runs/scenes/<name>/reset.json`, with capture diagnostics. The script prints the
+reset command and sends no movement or controller-initialization commands.
+
 For persistent manager state, omit `--request` and send one JSON request per
 stdin line. `--execute` enables the robot connection and `reset` requests:
 
@@ -124,9 +134,9 @@ Controller relaunch is separate and explicit: add `--initialize-controllers`
 only when controller initialization is needed. Detailed request examples and
 Python methods are in [the reset framework](src/auto_reset/README.md).
 
-A one-shot reset process exits with verification pending. To subsequently
-verify that same reset, keep the JSON-lines process running and submit `verify`.
-No object motion or fresh observation is inferred from a successful RPC.
+A one-shot reset process exits after measured completion, cancellation or an
+error. The JSON-lines process retains the manager and camera between requests.
+An explicit `verify` request can reassess a completed reset from supplied poses.
 
 ## Docker
 
@@ -141,8 +151,8 @@ docker run --rm -i --gpus all --network host \
 The container includes pinned CUDA PyTorch and cuRobo dependencies. Execution
 requires an NVIDIA GPU and the NVIDIA Container Toolkit (`--gpus all`); CPU IK
 fallback is disabled. It can plan using supplied poses and a saved buffer
-calibration. Add `--execute` to enable transfers. Fresh buffer capture runs in
-the lab environment with ZED bindings; the image contains no camera SDK.
+calibration. Feedback execution also requires an open camera with ZED bindings;
+the current image contains no camera SDK, so run that flow in the lab environment.
 Only source, packaging files and example configs enter the build context;
 local configs, datasets, environments and recordings are excluded.
 

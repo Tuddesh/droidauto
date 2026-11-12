@@ -14,7 +14,7 @@ and `buffer` live directly under `src/`. The application entry point is
 | Targets | Buffer-relative poses and one-cell placements using object dimensions and a supplied floor height. |
 | Planning | Pick/place endpoints; CUDA cuRobo IK with configured joint bounds and arm self-collision; no scene/path collision planner or grasp search. |
 | Execution | DROID arm/gripper commands, joint-velocity settling, cooperative cancellation and failure logging. |
-| Verification | Final supplied observations compared with targets; result retained in manager state. |
+| Feedback | Fresh task-object observations compared with targets after each manipulation; completion is measured. |
 | Localization | Shared ArUco detector; cube poses fitted from one/stereo images or supplied; fixed buffer pose captured/cached. |
 | Existing utilities | Buffer ArUco/stereo localization, hand-eye/buffer calibration and independent ZED acquisition. |
 | Startup | JSON document/JSON-lines requests; optional DROID connection and explicit controller initialization. |
@@ -44,7 +44,8 @@ Objects own physical data and grasp descriptions. `Buffer` owns grid geometry,
 fixtures and its independent localization methods. Desired placements belong
 to `TargetConfiguration`, separately from measured poses. `ResetPlanner`
 composes grasp/endpoints; `DroidRobot` solves IK locally with cuRobo on CUDA and
-delegates joint execution to DROID. All endpoint joints are solved before motion.
+delegates joint execution to DROID. Each stage's endpoint joints are solved
+before that stage moves.
 The manager owns sequencing, final verification and outcome state. No separate
 reset-result object or driver protocol hierarchy is needed. The `localize_cubes`
 image adapter handles marker fitting and diagnostics without owning hardware.
@@ -74,19 +75,27 @@ resets keep the direct transfer path.
 ## Reset lifecycle
 
 ```text
-camera/supplied object poses + detected/cached buffer → planning → executing → awaiting_verification
-                                         ↓ supplied final measurements
-                                      completed (success true/false)
+observe scene → compare with target → choose one off-target object → plan/execute manipulation
+      ↑                                                                  ↓
+      └────────────────── return to observation pose ─────────────────────┘
+compare finds all requested objects within tolerance → completed (success true)
 ```
 
 Exceptions produce `failed`; a cooperative cancellation produces `cancelled`.
-Pickup poses are invalidated when their transfer starts. Completing motion
-does not establish placement success. Final measurements are required for a
-verified outcome; no localization output is synthesized from commanded poses.
+Task-object poses are invalidated when a transfer starts. Every completed
+manipulation is followed by another scene scan; commanded targets never become
+observations. The first observed off-target object in target order is selected
+again from each new scene. Missing detections cannot establish success. With no
+observed off-target object, the loop rescans until objects are visible or cancelled.
+There is no fixed retry limit. Controller/capture exceptions terminate as failures.
 State is held in memory for the process lifetime; JSONL logs retain events.
-The JSON-lines process should remain running between reset and verification.
+The JSON-lines process retains the camera and manager between reset requests.
 
 The planner assumes a clear transit corridor. It sends endpoints without dense
 interpolation or intermediate positional-error checks; DROID joint-space moves
 are not guaranteed to follow straight Cartesian segments. Neither collision
 avoidance nor recovery from an emergency-stopped server is implemented.
+Collision-aware path planning is required before unattended operation. It must
+include the table, buffer, gripper, camera and carried object, and validate the
+joint paths actually executed between endpoints. This remains unimplemented
+and unconfigured.

@@ -2,7 +2,8 @@
 
 Object poses come from camera marker observations or the caller. Existing
 Buffer localization supplies the fixed buffer pose, cached until a rescan.
-Callers later submit final measurements for verification.
+Reset execution rescans after each manipulation and chooses its next action
+from measured scene errors until all requested objects reach their targets.
 Execution delegates each
 endpoint/gripper command to DROID; no positional-error gating or interpolation
 is inserted. Cancellation takes effect between blocking commands.
@@ -228,7 +229,8 @@ class ResetManager:
 
     def plan(self, target_configuration: TargetConfiguration, *,
              current_tool_pose: np.ndarray | None = None, solve_ik: bool = False,
-             rescan_objects: bool | None = None) -> ResetPlan:
+             rescan_objects: bool | None = None,
+             observation_tool_pose: np.ndarray | None = None) -> ResetPlan:
         """Plan the next scan or transfer stage; supplied tool pose allows offline use."""
         if target_configuration.buffer_id != self.buffer.object_id:
             raise ValueError("Target configuration belongs to a different buffer")
@@ -261,7 +263,7 @@ class ResetManager:
                             "scan_distance_m": options.get("scan_distance_m", 0.25)}
         actions = self.planner.plan(self.objects, target_configuration,
                                     buffer_pose=self.buffer.pose, current_tool_pose=current_tool_pose,
-                                    **scan_options)
+                                    observation_tool_pose=observation_tool_pose, **scan_options)
         if solve_ik and self.robot is None:
             raise ValueError("Joint planning needs a robot backend with local cuRobo IK")
         seed = self.robot.read_state().joints if solve_ik else None
@@ -283,49 +285,100 @@ class ResetManager:
                                  **self.robot.last_ik)
         return actions
 
-    def reset(self, target_configuration: TargetConfiguration, *, rescan_objects: bool | None = None) -> None:
-        """Rescan camera-observed cubes before transfers; verify final poses separately."""
+    def reset(self, target_configuration: TargetConfiguration, *, rescan_objects: bool | None = None,
+              use_current_observations: bool = False, detect_buffer: bool = False) -> None:
+        """Observe/compare/execute one manipulation repeatedly until the target is measured.
+
+        Every completed manipulation returns to the starting observation pose.
+        The next full scene observation determines the next action, including
+        retries of misplaced objects. There is no fixed manipulation limit.
+        Caller-supplied observations may seed only the first iteration; later
+        iterations always capture fresh images with the existing station camera.
+        """
         if not self._run_lock.acquire(blocking=False):
             raise RuntimeError("A reset is already executing")
         try:
-            if self.robot is None:
-                raise ValueError("Reset execution needs a connected robot backend")
             self._cancel_requested.clear()
-            if self._state["phase"] == "awaiting_verification":
-                self._record("verification_not_supplied", previous_scene=self._state["scene_before"])
             self.target_configuration = deepcopy(target_configuration)
-            self._state.update(phase="planning", current_action=None, success=None,
-                               scene_before=self.observe(), scene_after=None,
+            self._state.update(phase="observing", current_action=None, success=None,
+                               scene_before=None, scene_after=None, iterations=0, manipulations=0,
                                object_placement_errors={}, failure_reason=None,
                                timing={"started_s": time.time()})
             try:
-                self._record("reset_started", scene=self._state["scene_before"],
-                             targets={key: value.tolist() for key, value in self.target_configuration.poses.items()})
-                options = {} if self.station_config is None else self.station_config.data.get("reset", {})
+                if self.robot is None:
+                    raise ValueError("Reset execution needs a connected robot backend")
+                if self.camera is None or self.station_config is None:
+                    raise ValueError("Feedback reset requires an open station camera and configuration for rescanning")
+                if self.target_configuration.buffer_id != self.buffer.object_id:
+                    raise ValueError("Target configuration belongs to a different buffer")
+                if not self.target_configuration.poses:
+                    raise ValueError("A reset request needs at least one target")
+                unknown = set(self.target_configuration.poses) - self.objects.keys()
+                if unknown:
+                    raise KeyError(f"Unknown target object(s): {sorted(unknown)}")
+                observation_tool_pose = self.robot.read_state().tool_pose.copy()
+                options = self.station_config.data.get("reset", {})
                 if rescan_objects is None:
-                    rescan_objects = (self._state.get("last_observation") is not None
-                                      and options.get("rescan_before_pick", True))
-                batches = ([TargetConfiguration(buffer_id=self.target_configuration.buffer_id,
-                                                poses={key: pose})
-                            for key, pose in self.target_configuration.poses.items()]
-                           if rescan_objects else [self.target_configuration])
-                for batch in batches:
+                    rescan_objects = options.get("rescan_before_pick", True)
+                self._record("reset_started", observation_tool_pose=observation_tool_pose.tolist(),
+                             targets={key: value.tolist() for key, value in self.target_configuration.poses.items()})
+                while True:
+                    if self._cancel_requested.is_set():
+                        raise ResetCancelled("Cancellation requested before scene observation")
+                    self._state.update(phase="observing", current_action=None)
+                    if use_current_observations and self._state["iterations"] == 0:
+                        if self.buffer.pose is None or detect_buffer:
+                            self.observe(detect_buffer=True)
+                        self._record("initial_observations_used", scene=self.observe())
+                    else:
+                        self.observe(detect_objects=True,
+                                     detect_buffer=detect_buffer and self._state["iterations"] == 0,
+                                     object_ids=tuple(self.target_configuration.poses))
+                    self._state["iterations"] += 1
+                    if self._state["scene_before"] is None:
+                        self._state["scene_before"] = self.observe()
+                    self._state["phase"] = "assessing"
+                    self._verify(self.target_configuration, finalize=False)
+                    if self._cancel_requested.is_set():
+                        raise ResetCancelled("Cancellation requested after scene observation")
+                    errors = self._state["object_placement_errors"]
+                    if all(error["within_tolerance"] for error in errors.values()):
+                        self._verify(self.target_configuration)
+                        break
+                    pending = [key for key in self.target_configuration.poses
+                               if errors[key]["observed"] and not errors[key]["within_tolerance"]]
+                    if not pending:
+                        self._record("scene_observation_incomplete", iteration=self._state["iterations"],
+                                     missing_objects=[key for key, error in errors.items() if not error["observed"]])
+                        continue
+                    object_id = pending[0]
+                    target = TargetConfiguration(buffer_id=self.target_configuration.buffer_id,
+                                                 poses={object_id: self.target_configuration.poses[object_id]})
+                    self._record("reset_action_selected", iteration=self._state["iterations"],
+                                 object_id=object_id, errors=errors[object_id])
                     self._state["phase"] = "planning"
-                    actions = self.plan(batch, solve_ik=True, rescan_objects=rescan_objects)
-                    self._record("plan_created", stage="scan" if rescan_objects else "transfer", actions=actions)
-                    if rescan_objects:
+                    # Supplied initial coordinates have no captured camera geometry
+                    # yet. Later camera observations enable the close-up stage.
+                    scan_pickup = rescan_objects and self._state.get("last_observation") is not None
+                    actions = self.plan(target, solve_ik=True, rescan_objects=scan_pickup,
+                                        observation_tool_pose=observation_tool_pose)
+                    self._record("plan_created", stage="scan" if scan_pickup else "transfer", actions=actions)
+                    if scan_pickup:
                         self._state["phase"] = "executing"
                         self._execute(actions)
                         self._state["phase"] = "planning"
-                        actions = self.plan(batch, solve_ik=True, rescan_objects=False)
+                        actions = self.plan(target, solve_ik=True, rescan_objects=False,
+                                            observation_tool_pose=observation_tool_pose)
                         self._record("plan_created", stage="transfer", actions=actions)
                     self._state["phase"] = "executing"
-                    # Commanded targets never substitute for scene measurements.
-                    for object_id in batch.poses:
-                        self.objects[object_id].mark_unobserved()
+                    # A manipulation may disturb other objects. The next decision
+                    # must use a new scan of all task objects, never these old poses.
+                    for key in self.target_configuration.poses:
+                        self.objects[key].mark_unobserved()
                     self._execute(actions)
-                self._state.update(phase="awaiting_verification", current_action=None)
-                self._record("awaiting_verification")
+                    self._state["manipulations"] += 1
+                    self._record("reset_action_finished", object_id=object_id,
+                                 manipulation=self._state["manipulations"])
             except (Exception, KeyboardInterrupt) as exc:
                 self._state.update(phase="cancelled" if isinstance(exc, (ResetCancelled, KeyboardInterrupt)) else "failed",
                                    success=False, failure_reason=str(exc) or type(exc).__name__)
@@ -382,23 +435,23 @@ class ResetManager:
             raise ResetCancelled("Cancellation requested after final command")
 
     def verify(self, observations: Mapping[str, np.ndarray], *, timestamp: float | None = None) -> None:
-        """Submit measured final poses and compute the reset outcome."""
+        """Reassess an executed reset from independently supplied measurements."""
         if not self._run_lock.acquire(blocking=False):
             raise RuntimeError("Cannot verify while a reset is executing")
         try:
-            if self._state["phase"] != "awaiting_verification":
-                raise RuntimeError("No executed reset is awaiting verification")
+            if self._state["phase"] not in ("awaiting_verification", "completed"):
+                raise RuntimeError("No executed reset is available for verification")
             self.observe(observations, timestamp=timestamp)
             self._verify(self.target_configuration)
         finally:
             self._run_lock.release()
 
-    def _verify(self, target_configuration: TargetConfiguration) -> None:
-        """Compare actual final object poses with buffer-relative targets."""
+    def _verify(self, target_configuration: TargetConfiguration, *, finalize: bool = True) -> None:
+        """Compare measured poses for a loop decision or a final reset outcome."""
         errors = {}
         for object_id in target_configuration.poses:
             obj = self.objects[object_id]
-            if obj.pose is None:
+            if obj.pose is None or obj.pose_frame != "base":
                 errors[object_id] = {"observed": False, "within_tolerance": False}
                 continue
             desired = self.buffer.pose @ target_configuration.pose_for(object_id)
@@ -407,6 +460,11 @@ class ResetManager:
                                  "within_tolerance": distance <= self.position_tolerance_m
                                  and angle <= self.orientation_tolerance_rad}
         success = all(error["within_tolerance"] for error in errors.values())
+        if not finalize:
+            self._state.update(scene_after=self.observe(), object_placement_errors=errors)
+            self._record("scene_compared", iteration=self._state.get("iterations"),
+                         target_reached=success, errors=errors, scene=self._state["scene_after"])
+            return
         self._state.update(phase="completed", success=success, current_action=None,
                            scene_after=self.observe(), object_placement_errors=errors,
                            failure_reason=None if success else "Final placement missing or outside tolerance")

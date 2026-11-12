@@ -2,7 +2,8 @@
 
 The planner composes camera/tool mounts and object grasps into scan or transfer
 waypoints. A scan ends at an observation action; pickup is replanned afterwards
-from the refined pose. Poses are in robot-base coordinates. It does not run IK,
+from the refined pose. Transfers can end at the observation pose for the next
+scene scan. Poses are in robot-base coordinates. It does not run IK,
 interpolate trajectories or perform collision avoidance; the transit corridor
 must be clear and DROID executes each endpoint.
 """
@@ -36,7 +37,8 @@ class ResetPlanner:
              *, buffer_pose: np.ndarray, current_tool_pose: np.ndarray,
              tool_left_camera: np.ndarray | None = None,
              left_right_camera: np.ndarray | None = None,
-             scan_distance_m: float = 0.25) -> ResetPlan:
+             scan_distance_m: float = 0.25,
+             observation_tool_pose: np.ndarray | None = None) -> ResetPlan:
         """Plan transfers, or the first close-up scan when a camera mount is supplied."""
         buffer_pose, current = transform(buffer_pose), transform(current_tool_pose)
         actions = []
@@ -47,7 +49,7 @@ class ResetPlanner:
             transfer = self.plan_pick_place(
                 objects[object_id], target, current_tool_pose=current,
                 tool_left_camera=tool_left_camera, left_right_camera=left_right_camera,
-                scan_distance_m=scan_distance_m,
+                scan_distance_m=scan_distance_m, observation_tool_pose=observation_tool_pose,
             )
             actions.extend(transfer)
             if tool_left_camera is not None:
@@ -60,7 +62,8 @@ class ResetPlanner:
                         current_tool_pose: np.ndarray, grasp_index: int = 0,
                         tool_left_camera: np.ndarray | None = None,
                         left_right_camera: np.ndarray | None = None,
-                        scan_distance_m: float = 0.25) -> ResetPlan:
+                        scan_distance_m: float = 0.25,
+                        observation_tool_pose: np.ndarray | None = None) -> ResetPlan:
         """Plan a calibrated close-up scan, or a transfer using T_object_tool."""
         if scene_object.pose is None or scene_object.pose_frame != "base":
             raise ValueError(f"{scene_object.object_id} needs a supplied pose in the base frame")
@@ -114,8 +117,11 @@ class ResetPlanner:
         def gripper(kind):
             return {"type": kind, "name": kind, "object_id": scene_object.object_id}
 
-        return [move("initial_lift", above(current)), gripper("open_gripper"),
+        actions = [move("initial_lift", above(current)), gripper("open_gripper"),
                 move("above_pick", above(source)), move("pick", source),
                 gripper("close_gripper"), move("lift", above(source)),
                 move("above_place", above(destination)), move("place", destination),
                 gripper("open_gripper"), move("retreat", above(destination))]
+        if observation_tool_pose is not None:
+            actions.append(move("return_to_observation", observation_tool_pose))
+        return actions

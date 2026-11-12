@@ -28,7 +28,7 @@ def handle_request(manager, config, request, *, execute=False):
     if operation == "reset" and not execute:
         raise ValueError("Reset execution requires --execute")
     source = ("supplied" if "observations" in request else "camera"
-              if operation == "observe" or request.get("detect_objects") else "existing observations")
+              if operation in ("observe", "reset") or request.get("detect_objects") else "existing observations")
     manager._record("request_received", operation=operation, object_pose_source=source,
                     detect_buffer=bool(request.get("detect_buffer", False)))
     if operation == "verify":
@@ -40,7 +40,7 @@ def handle_request(manager, config, request, *, execute=False):
                 raise ValueError("Choose detect_objects or supplied observations")
             manager.observe({key: config.read_pose(value) for key, value in request["observations"].items()},
                             timestamp=request.get("timestamp_s"))
-        elif operation == "observe" or request.get("detect_objects"):
+        elif operation != "reset" and (operation == "observe" or request.get("detect_objects")):
             manager.observe(detect_objects=True, detect_buffer=request.get("detect_buffer", False))
         if operation in ("plan", "reset"):
             target = config.make_target(request["targets"], manager.buffer, manager.objects)
@@ -50,13 +50,10 @@ def handle_request(manager, config, request, *, execute=False):
                                        solve_ik=request.get("solve_ik", False),
                                        rescan_objects=request.get("rescan_objects"))
                 return {"actions": actions, "state": dict(manager.state)}
-            print(f"Pickup coordinate source: {source}", file=sys.stderr, flush=True)
-            for object_id in target.poses:
-                obj = manager.objects[object_id]
-                if obj.pose is not None:
-                    print(f"{object_id} pickup cube center in base (m): {obj.pose[:3, 3].tolist()}",
-                          file=sys.stderr, flush=True)
-            manager.reset(target, rescan_objects=request.get("rescan_objects"))
+            print("Feedback reset: rescan and reassess after each manipulation", file=sys.stderr, flush=True)
+            manager.reset(target, rescan_objects=request.get("rescan_objects"),
+                          use_current_observations="observations" in request,
+                          detect_buffer=request.get("detect_buffer", False))
     response = {"state": dict(manager.state)}
     if operation == "observe":
         response["observations"] = manager.observe()
@@ -109,6 +106,7 @@ def main():
         camera = None
         needs_camera = (
             args.scan_buffer or request is None or request.get("detect_objects", False)
+            or request.get("operation") == "reset"
             or (request.get("operation") == "observe" and "observations" not in request)
             or (calibration is None and request.get("operation", "plan") in ("observe", "plan", "reset"))
         )
