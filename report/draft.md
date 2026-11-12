@@ -22,7 +22,7 @@ TODO — write after the results. Contents: see outline.md.
 ## Task formulation {#sec:task}
 
 Our station follows the hardware setup of DROID [@khazatsky2024droid]: a
-Franka Emika Panda 7-DoF arm with a parallel-jaw gripper (TODO(lab): model) and
+Franka Emika Panda 7-DoF arm with a Robotiq two-finger gripper and
 a stereo camera mounted on the wrist, controlled through the DROID robot
 server. Next to the robot lies a _grid_: a 6 × 6 arrangement of Gridfinity cells with a cell
 pitch of $a = 42$ mm, on which objects are stored in defined cells. Three cells
