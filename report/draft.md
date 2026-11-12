@@ -2,6 +2,8 @@
 title: "Automatic Scene Reset for Real-World Policy Evaluation on the DROID Platform"
 author: [Tadeáš Jirák, Lenka Šimová]
 date: "November 2026"
+bibliography: references.bib
+link-citations: true
 abstract: "TODO — write last."
 ---
 
@@ -24,7 +26,7 @@ TODO — write after the results. Contents: see outline.md.
 Our station follows the hardware setup of DROID [@khazatsky2024droid]: a
 Franka Emika Panda 7-DoF arm with a Robotiq two-finger gripper and
 a stereo camera mounted on the wrist, controlled through the DROID robot
-server. Next to the robot lies a _grid_: a 6 × 6 arrangement of Gridfinity cells with a cell
+server. Next to the robot lies a _grid_: a 6 × 6 arrangement of Gridfinity [@gridfinity] cells with a cell
 pitch of $a = 42$ mm, on which objects are stored in defined cells. Three cells
 of the grid hold fixed tiles carrying ArUco markers, which define the grid
 coordinate frame $g$. The manipulated objects are 40 × 40 × 20 mm cubes with one
@@ -78,7 +80,7 @@ interfaces (Fig. @fig:pipeline):
 
 : Sub-problems of the scene reset and their interfaces. {#tbl:interfaces}
 
-![Pipeline of one reset. TODO: block diagram (TikZ).](figures/pipeline.pdf){#fig:pipeline}
+![Pipeline of one reset. The grid is localized once per session and its pose is cached. For each target object, a close-up scan refines the coarse cube pose before the transfer is planned. Only joint targets and gripper commands are sent to the DROID server; the final pose measurement is supplied by the caller.](figures/pipeline.pdf){#fig:pipeline}
 
 All poses passed between the components are rigid transforms in metres, and
 every pose carries the name of its reference frame. Observations are
@@ -125,7 +127,7 @@ make the situation worse.
 
 ## Related work {#sec:related}
 
-TODO (½ page). Planned content, citations to verify:
+TODO (½ page). Planned content (citations verified, see `references.bib`):
 
 - DROID platform and dataset [@khazatsky2024droid].
 - Automating real-world policy evaluation, including learned reset policies:
@@ -185,15 +187,18 @@ The frames used throughout the report are (Fig. @fig:frames):
 [^tool]: The code calls this frame the *tool* frame.
 
 The camera is rigidly mounted on the wrist. Its mounting transform
-$\mathbf{T}_{fc}$ was calibrated beforehand (TODO(ask): by whom and with which
-method). The rectified stereo geometry $\mathbf{T}_{cr}$ is provided by the
+$\mathbf{T}_{fc}$ was calibrated beforehand with the camera calibration tool
+of the DROID control software [@khazatsky2024droid] and is treated as a
+fixed constant.
+<!-- Optional detail if verified: the board type (ChArUco?) and how many arm
+poses were used; the date of the calibration. -->
+The rectified stereo geometry $\mathbf{T}_{cr}$ is provided by the
 camera SDK. Since the images are rectified, the projection
 $\pi(\mathbf{K}_e, \mathbf{X})$ of a 3D point $\mathbf{X}$ into eye $e \in \{c, r\}$
 is an ideal pinhole projection with intrinsic matrix $\mathbf{K}_e$ and no lens
 distortion.
 
-![Coordinate frames and the transform chain from the robot base to the grid
-and to the cube. TODO: diagram.](figures/frames.pdf){#fig:frames}
+![Coordinate frames (schematic side view, not to scale). An arrow from frame $A$ to frame $B$ denotes the transformation $\mathbf{T}_{BA}$. Colours show where each transformation comes from. The cube frame $o$ is parallel to the marker frame $m$; the right camera $r$ is omitted.](figures/frames.pdf){#fig:frames}
 
 Rotations given as three angles use the fixed-axis XYZ convention,
 $\mathbf{R} = \mathbf{R}_z(\gamma)\mathbf{R}_y(\beta)\mathbf{R}_x(\alpha)$ for
@@ -204,8 +209,7 @@ $\mathbf{R} = \mathbf{R}_z(\gamma)\mathbf{R}_y(\beta)\mathbf{R}_x(\alpha)$ for
 **Model.** Marker $j$ lies in a known cell $(i_j, k_j)$ whose centre is
 $$
 \mathbf{c}_j = \bigl( (i_j + \tfrac12)\,a,\; (k_j + \tfrac12)\,a,\; 0 \bigr)^{\top}.
-$$
-{#eq:cell}
+$$ {#eq:cell}
 
 The markers are 3D-printed into Gridfinity tiles. Each tile can sit in its
 cell in any of four orientations, and the print need not be exactly square to
@@ -213,16 +217,12 @@ the cell. We therefore do not assume the in-plane rotation of a marker but
 estimate it as an extra unknown $\phi_j$. With $h = s_m/2$ the half-side of a
 grid marker ($s_m = 32$ mm) and the four corners of a centred square
 
-
 $$
-
 \mathbf{s}_1 = (-h, h, 0)^{\top},\;
 \mathbf{s}_2 = (h, h, 0)^{\top},\;
 \mathbf{s}_3 = (h, -h, 0)^{\top},\;
 \mathbf{s}_4 = (-h, -h, 0)^{\top},
-
-$$
-{#eq:corners}
+$$ {#eq:corners}
 
 
 in the order in which the ArUco detector returns them, corner $k$ of marker $j$
@@ -237,13 +237,11 @@ $\mathbf{T}_{cc} = \mathbf{I}$, $\mathbf{T}_{rc} = (\mathbf{T}_{cr})^{-1}$.
 We minimize the reprojection error over all corners that were actually detected
 in either eye:
 
-
 $$
 \min_{\mathbf{T}_{cg},\,\{\phi_j\}}
 \sum_{(e,j,k)\,\in\,\mathcal{D}}
 \bigl\| \pi\bigl(\mathbf{K}_e,\; \mathbf{T}_{ec}\,\mathbf{T}_{cg}\,\mathbf{X}_{jk}(\phi_j)\bigr) - \mathbf{u}_{ejk} \bigr\|^2 .
-$$
-{#eq:grid-fit}
+$$ {#eq:grid-fit}
 
 The yaws are shared between the eyes. Because each $\phi_j$ is free, one marker
 alone does not determine the rotation of the grid about its normal, so
@@ -265,13 +263,11 @@ combination of their candidates we build a grid pose:
 3. the rotation maps the grid triad $(\mathbf{d}_g, \mathbf{e}_z \times \mathbf{d}_g, \mathbf{e}_z)$
    onto $(\mathbf{d}, \mathbf{n} \times \mathbf{d}, \mathbf{n})$:
 
-
 $$
-\mathbf{R}\_{cg} = \mathbf{d}\,\mathbf{d}\_g^{\top}
-
-- (\mathbf{n} \times \mathbf{d})(\mathbf{e}\_z \times \mathbf{d}\_g)^{\top}
-- \mathbf{n}\,\mathbf{e}\_z^{\top};
-  $$ {#eq:init-rotation}
+\mathbf{R}_{cg} = \mathbf{d}\,\mathbf{d}_g^{\top}
++ (\mathbf{n} \times \mathbf{d})(\mathbf{e}_z \times \mathbf{d}_g)^{\top}
++ \mathbf{n}\,\mathbf{e}_z^{\top};
+$$ {#eq:init-rotation}
 
 4. the translation is the average of $\mathbf{t}_i - \mathbf{R}_{cg}\mathbf{c}_i$
    and $\mathbf{t}_j - \mathbf{R}_{cg}\mathbf{c}_j$;
@@ -280,7 +276,8 @@ $$
    $\phi_j = \operatorname{atan2}(Q_{21} - Q_{12},\, Q_{11} + Q_{22})$.
 
 The eight initial guesses with the lowest cost are refined with a
-trust-region least-squares solver (SciPy `least_squares`, method `trf`, at
+trust-region reflective least-squares solver [@branch1999trf] (SciPy
+`least_squares` [@virtanen2020scipy], method `trf`, at
 most 120 function evaluations, tolerances $10^{-9}$). A solution is accepted only if
 every fitted corner lies in front of the camera that observed it and the grid
 faces that camera. Of the accepted solutions, the one with the lowest root-mean-square (RMS)
@@ -311,8 +308,7 @@ $$
 \min_{\mathbf{T}_{cm}}
 \sum_{e}\sum_{k=1}^{4}
 \bigl\| \pi\bigl(\mathbf{K}_e,\; \mathbf{T}_{ec}\,\mathbf{T}_{cm}\,\mathbf{s}_k\bigr) - \mathbf{u}_{ek} \bigr\|^2
-$$
-{#eq:cube-fit}
+$$ {#eq:cube-fit}
 over the eyes in which the marker was detected, so one eye is
 sufficient. The IPPE candidates of each eye are transformed into the left
 frame. The candidate with the lowest cost in ([@eq:cube-fit]) is the starting
@@ -326,9 +322,8 @@ $$
 \mathbf{T}_{bo} = \mathbf{T}_{bf}\;\mathbf{T}_{fc}\;\mathbf{T}_{cm}\;\bigl(\mathbf{T}_{om}\bigr)^{-1},
 \qquad
 \mathbf{T}_{om} =
-\begin{bmatrix} \mathbf{R}\_z(\psi_m) & (0,\,0,\,h_o/2)^{\top} \\ \mathbf{0}^{\top} & 1 \end{bmatrix},
-$$
-{#eq:cube-pose}
+\begin{bmatrix} \mathbf{R}_z(\psi_m) & (0,\,0,\,h_o/2)^{\top} \\ \mathbf{0}^{\top} & 1 \end{bmatrix},
+$$ {#eq:cube-pose}
 where $h_o = 20$ mm is the cube height and $\psi_m = 0$ is the marker's yaw
 relative to the cube edges. The marker is centred on the top face.
 
@@ -363,8 +358,7 @@ $$
 \end{bmatrix},
 \qquad
 \mathbf{t}^{\mathrm{scan}}_{bc} = \mathbf{t}_{bm} - \mathbf{R}^{\mathrm{scan}}_{bc}\,\bigl(\mathbf{q} + D\,\mathbf{e}_z\bigr),
-$$
-{#eq:scan-pose}
+$$ {#eq:scan-pose}
 and the flange target
 $\mathbf{T}^{\mathrm{scan}}_{bf} = \mathbf{T}^{\mathrm{scan}}_{bc}\,(\mathbf{T}_{fc})^{-1}$.
 The scan stage consists of four motions and one observation: lift to the
@@ -383,8 +377,7 @@ $$
 \mathbf{R}_z(\psi) & \bigl((i+\tfrac12)a,\; (j+\tfrac12)a,\; z_s + h_o/2\bigr)^{\top}\\
 \mathbf{0}^{\top} & 1
 \end{bmatrix},
-$$
-{#eq:target}
+$$ {#eq:target}
 where $z_s$ is the height of the cell floor relative to the marker plane and
 $h_o/2$ lifts the cube centre above the floor. The floor height is a property of
 the physical grid. We measure it once (TODO(lab): value) rather than assume that
@@ -409,8 +402,7 @@ $$
 \mathbf{R}_z(\psi_g)\,\mathbf{R}_x(\pi) & (0,\,0,\,d_g)^{\top}\\
 \mathbf{0}^{\top} & 1
 \end{bmatrix},
-$$
-{#eq:grasp}
+$$ {#eq:grasp}
 where $d_g = 0.167$ m is the distance from the flange to the grasp centre
 between the closed fingers and $\psi_g = 0$ is the grasp yaw relative to the cube.
 $\mathbf{R}_x(\pi)$ turns the flange upside down, so that its $z$-axis, which points along the
@@ -421,15 +413,13 @@ $$
 \mathbf{T}^{\mathrm{pick}}_{bf} = \mathbf{T}_{bo}\,\mathbf{T}_{of},
 \qquad
 \mathbf{T}^{\mathrm{place}}_{bf} = \mathbf{T}_{bg}\,\mathbf{T}^{\star}_{go}\,\mathbf{T}_{of}.
-$$
-{#eq:pick-place}
+$$ {#eq:pick-place}
 
 **Endpoint sequence.** Motions between the pick and the place happen at a common
 transit height
 $$
 z_h = \max\bigl(z_T,\; z_{\mathrm{cur}},\; z_{\mathrm{pick}} + \Delta,\; z_{\mathrm{place}} + \Delta\bigr),
-$$
-{#eq:transit}
+$$ {#eq:transit}
 where $z_T = 0.40$ m is the configured transit height in the base frame,
 $z_{\mathrm{cur}}$, $z_{\mathrm{pick}}$ and $z_{\mathrm{place}}$ are the flange
 heights of the current, pick and place poses, and $\Delta = 0.08$ m is the
@@ -452,7 +442,7 @@ ten actions (Fig. @fig:sequence):
 
 : The ten actions of one transfer. {#tbl:actions}
 
-![Side view of the endpoint sequence of one transfer. TODO: diagram.](figures/sequence.pdf){#fig:sequence}
+![Flange endpoints of one transfer (schematic side view, not to scale). Numbers refer to Table @tbl:actions; gripper actions take place at the endpoint where they are listed. Only the endpoints are commanded; the dotted lines indicate their order, not the executed path.](figures/sequence.pdf){#fig:sequence}
 
 **Fingertip floor.** Before IK, every flange target is checked so that the closed
 fingertips, at $d_{\mathrm{tip}} = 0.178$ m along the flange $z$-axis, stay at
@@ -462,8 +452,7 @@ $z$-axis, the fingertip height is $z_f + R_{33}\,d_{\mathrm{tip}}$. If it is
 below $z_{\min}$, the target is raised to
 $$
 z_f \leftarrow z_{\min} - R_{33}\,d_{\mathrm{tip}},
-$$
-{#eq:clip}
+$$ {#eq:clip}
 keeping $x$, $y$ and the orientation.
 
 
@@ -481,8 +470,7 @@ because the robot carries a different gripper. Among the valid solutions we
 choose the one closest to the previous joint configuration,
 $$
 \mathbf{q}_n = \arg\min_{\mathbf{q}\,\in\,\mathcal{Q}_n} \|\mathbf{q} - \mathbf{q}_{n-1}\|_2^2 ,
-$$
-{#eq:ik-select}
+$$ {#eq:ik-select}
 where $\mathcal{Q}_n$ is the set of valid IK solutions for endpoint $n$ and
 $\mathbf{q}_0$ is the measured joint configuration. Chaining the endpoints this way
 avoids large reconfigurations of the arm between consecutive endpoints.
@@ -524,7 +512,8 @@ TODO — brief. Bullets to expand:
 - Hardware: Panda + DROID, Robotiq gripper (TODO(lab) model), ZED wrist camera
   (TODO(lab) model) at 1280 × 720 px per eye and 15 FPS, control PC with an NVIDIA
   GPU (TODO(lab)), DROID ZeroRPC server on a NUC. Fig. @fig:station (photo).
-- Software: Python; OpenCV ArUco (sub-pixel corner refinement), SciPy,
+- Software: Python; OpenCV ArUco [@bradski2000opencv] (sub-pixel corner refinement),
+  SciPy [@virtanen2020scipy],
   cuRobo + PyTorch (CUDA), ZED SDK. Three packages: `scene` (physical objects
   and grasp geometry), `buffer` (geometry and localization of the grid),
   `auto_reset` (planning, execution, verification, I/O).
@@ -549,19 +538,9 @@ TODO.
 
 # References
 
-<!-- To verify and convert to BibTeX:
-khazatsky2024droid — Khazatsky et al., DROID: A Large-Scale In-the-Wild Robot Manipulation Dataset, RSS 2024.
-zhou2025autoeval — Zhou et al., AutoEval: Autonomous Evaluation of Generalist Robot Manipulation Policies in the Real World, 2025.
-atreya2025roboarena — Atreya et al., RoboArena: Distributed Real-World Evaluation of Generalist Robot Policies, 2025.
-li2024simpler — Li et al., Evaluating Real-World Robot Manipulation Policies in Simulation (SIMPLER), CoRL 2024.
-gupta2021resetfree — Gupta et al., Reset-Free Reinforcement Learning via Multi-Task Learning, ICRA 2021.
-garrido2014aruco — Garrido-Jurado et al., Automatic generation and detection of highly reliable fiducial markers under occlusion, Pattern Recognition 2014.
-collins2014ippe — Collins & Bartoli, Infinitesimal Plane-Based Pose Estimation, IJCV 2014.
-more1978lm — Moré, The Levenberg–Marquardt algorithm: implementation and theory, 1978.
-sundaralingam2023curobo — Sundaralingam et al., cuRobo: Parallelized Collision-Free Minimum-Jerk Robot Motion Generation, 2023.
-gridfinity — Z. Freedman, Gridfinity (web).
--->
-$$
+::: {#refs}
+:::
+
 
 # Appendix A: Parameters {#sec:appendix-params}
 
