@@ -192,6 +192,9 @@
   "reset": {
     "rescan_before_pick": true,
     "scan_distance_m": 0.25,
+    "scan_settle_s": 2.5,
+    "scan_velocity_threshold_rad_s": 0.005,
+    "scan_capture_count": 5,
     "transit_height_m": 0.4,
     "lift_clearance_m": 0.08,
     "position_tolerance_m": 0.01,

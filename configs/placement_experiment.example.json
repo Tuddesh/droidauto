@@ -1,10 +1,11 @@
 {
   "runs": 10,
   "home_joints_rad": [-0.014233452278911247, -0.6135982081418461, 0.014630441317634612, -2.504110387305075, 0.004121551259886019, 1.8648558356542633, 0.004391114317225282],
-  "table_bounds_xy_m": [-0.6, 1.4, -1.0, 1.0],
+  "table_bounds_xy_m": [-0.6, 1.4, -0.4, 0.4],
   "geometry_source": {
     "home": "/home/ros/Downloads/#HOME(2).task: DROID-home joint angles",
-    "table_xy": "/home/ros/ROB/pick_place/src/motion/collision.py: TABLE_X, TABLE_Y",
+    "table_x": "/home/ros/ROB/pick_place/src/motion/collision.py: TABLE_X",
+    "table_y": "80 cm table width, robot centered: -0.40 to +0.40 m",
     "table_z": "station.planar_scene.table_z_m"
   }
 }

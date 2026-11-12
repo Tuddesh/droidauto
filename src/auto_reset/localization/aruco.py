@@ -26,12 +26,15 @@ unfittable markers leave their cube unobserved. Stereo uses both eyes' corners
 in one reprojection fit; one visible eye also works. No RMS rejection threshold
 is imposed. Missing configured markers are retried at larger image scales in
 each eye using the same detector. All fitted corners use native image coordinates.
-Inputs and annotated frozen frames are saved for every attempt.
+Stationary bursts may contain multiple pairs; repeated detections within a
+single frame remain invalid. All pairs contribute to one pose fit. Every source
+frame is saved; review shows one frozen fitted image per eye.
 """
     base_left_camera = transform(base_left_camera)
     directory.mkdir(parents=True, exist_ok=True)
     report = {"directory": str(directory), "base_left_camera": base_left_camera.tolist(),
-              "eyes": {}, "objects": {}}
+              "eyes": {}, "objects": {}, "captures": []}
+    last_frames = {frame.view: frame for frame in frames}
     bindings, samples, poses, overlays = {}, {}, {}, {}
     for obj in objects.values():
         if not isinstance(obj, Cube):
@@ -47,7 +50,7 @@ Inputs and annotated frozen frames are saved for every attempt.
         report["objects"][obj.object_id] = {"dictionary": key[0], "id": key[1],
                                                "error": "Configured marker not detected"}
 
-    for frame in frames:
+    for capture_index, frame in enumerate(frames):
         rgb = frame.image_rgb
         gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
         corners, ids, rejected, indices = detector.detectMarkersMultiDict(gray)
@@ -85,6 +88,11 @@ Inputs and annotated frozen frames are saved for every attempt.
                "left_camera_eye": None if frame.left_camera_eye is None else frame.left_camera_eye.tolist(),
                "rejected_candidates": len(rejected), "detection_passes": passes}
         report["eyes"][frame.view] = eye
+        if len(frames) > len(last_frames):
+            path = directory / f"{frame.view}_sample_{capture_index:02d}_input.png"
+            if not cv2.imwrite(str(path), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)):
+                raise OSError(f"Could not save object scan image: {path}")
+            report["captures"].append({"view": frame.view, "input": str(path), "metadata": eye})
         overlays[frame.view] = annotated
         if ids is not None:
             cv2.aruco.drawDetectedMarkers(annotated, corners, ids)
@@ -113,7 +121,7 @@ Inputs and annotated frozen frames are saved for every attempt.
         result = report["objects"][obj.object_id]
         if not observations:
             continue
-        if len({frame.view for frame, _, _ in observations}) != len(observations):
+        if len({id(frame) for frame, _, _ in observations}) != len(observations):
             result["error"] = "The configured marker appears more than once in an eye"
             continue
         half = obj.marker_size_m / 2
@@ -208,11 +216,16 @@ Inputs and annotated frozen frames are saved for every attempt.
             result.update(base_marker=base_marker.tolist(), base_cube=base_cube.tolist(),
                           base_xyz_m=base_cube[:3, 3].tolist(),
                           base_rpy_deg=np.degrees(transform_to_pose(base_cube)[3:]).tolist(),
-                          views=[frame.view for frame, _, _ in observations],
+                          views=list(dict.fromkeys(frame.view for frame, _, _ in observations)),
+                          capture_count=len({id(frame) for frame, _, _ in observations}),
                           reprojection_rms_px=float(np.sqrt(np.mean(np.sum(errors ** 2, axis=2)))),
-                          per_eye_rms_px={frame.view: float(np.sqrt(np.mean(np.sum(error ** 2, axis=1))))
-                                          for (frame, _, _), error in zip(observations, errors)})
-            for frame, _, camera_left in observations:
+                          per_eye_rms_px={view: float(np.sqrt(np.mean(np.sum(
+                              errors[[i for i, (frame, _, _) in enumerate(observations) if frame.view == view]] ** 2,
+                              axis=2)))) for view in dict.fromkeys(frame.view for frame, _, _ in observations)})
+            for frame in last_frames.values():
+                if frame.left_camera_eye is None and frame.view != "left":
+                    continue
+                camera_left = np.linalg.inv(np.eye(4) if frame.left_camera_eye is None else frame.left_camera_eye)
                 camera_marker = camera_left @ left_marker
                 cv2.drawFrameAxes(overlays[frame.view], frame.camera_matrix, frame.distortion,
                                   cv2.Rodrigues(camera_marker[:3, :3])[0], camera_marker[:3, 3],
@@ -224,11 +237,11 @@ Inputs and annotated frozen frames are saved for every attempt.
     panels = []
     height = max(frame.image_rgb.shape[0] for frame in frames)
     width = max(frame.image_rgb.shape[1] for frame in frames)
-    for frame in frames:
+    for frame in last_frames.values():
         annotated = overlays[frame.view]
         panel = np.full((height + 160, width, 3), 25, dtype=np.uint8)
         panel[:annotated.shape[0], :annotated.shape[1]] = annotated
-        lines = [f"{frame.view.upper()} | FROZEN cube observation",
+        lines = [f"{frame.view.upper()} | FROZEN cube observation | {len(frames)} source images",
                  "1/2 eyes | A accept | R retake | P print poses | Q / window X cancel"]
         for object_id, result in report["objects"].items():
             if "error" in result:

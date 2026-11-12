@@ -106,7 +106,8 @@ class ResetManager:
 
     def observe(self, observations: Mapping[str, np.ndarray] | None = None, *,
                 timestamp: float | None = None, detect_buffer: bool = False,
-                detect_objects: bool = False, object_ids: tuple[str, ...] | None = None) -> dict:
+                detect_objects: bool = False, object_ids: tuple[str, ...] | None = None,
+                capture_count: int = 1) -> dict:
         """Accept supplied poses or capture cube markers with the shared detector.
 
         In an explicit observation batch, omitted task objects become unobserved.
@@ -116,11 +117,18 @@ class ResetManager:
         detect_objects=True captures current cube poses; missing cubes become
         unobserved. Scan diagnostics are retained in state['last_observation'].
         The caller owns one open camera session for the manager's lifetime.
+        Automatic scans wait for sustained low joint velocities. A close-up
+        can fit multiple stereo pairs from the same stationary camera pose.
         """
         if detect_objects and observations is not None:
             raise ValueError("Choose camera object detection or supplied object poses")
         if object_ids is not None and not detect_objects:
             raise ValueError("object_ids selects objects for camera detection only")
+        if isinstance(capture_count, bool) or not isinstance(capture_count, int) or capture_count < 1:
+            raise ValueError("capture_count must be a positive integer")
+        options = {} if self.station_config is None else self.station_config.data.get("reset", {})
+        scan_settle_s = float(options.get("scan_settle_s", 2.5))
+        scan_velocity = float(options.get("scan_velocity_threshold_rad_s", 0.005))
         selected = self.objects if object_ids is None else {key: self.objects[key] for key in object_ids}
         if detect_objects:
             if self._state["phase"] in ("planning", "executing"):
@@ -156,7 +164,8 @@ class ResetManager:
             self._record("buffer_detection_started")
             # Automatic base-frame composition needs live feedback around the
             # capture; a frozen pre-stop pose must not become a new calibration.
-            self.robot.read_state()
+            self.robot.wait_until_stopped(timeout_s=self.motion_timeout_s,
+                                          settle_s=scan_settle_s, velocity_threshold_rad_s=scan_velocity)
             self.camera.set_auto_exposure_roi(self.station_config.camera.get("auto_exposure_roi"))
             calibration = capture_calibration(self.station_config, self.robot, self.camera,
                                               review=self.station_config.camera.get("review_capture", False))
@@ -178,11 +187,29 @@ class ResetManager:
                 camera = self.camera
                 camera.set_auto_exposure_roi(config.camera.get("auto_exposure_roi"))
                 while True:
-                    self.robot.read_state()
-                    frames = camera.capture_pair() if camera.view == "stereo" else [camera.capture()]
-                    if not frames or any(frame.serial != str(config.camera["serial"]) for frame in frames):
-                        raise ValueError("Object scan does not match the configured camera")
-                    base_tool = self.robot.read_state().tool_pose
+                    if self._cancel_requested.is_set():
+                        raise ResetCancelled("Cancellation requested before object capture")
+                    self.robot.wait_until_stopped(timeout_s=self.motion_timeout_s,
+                                                  settle_s=scan_settle_s, velocity_threshold_rad_s=scan_velocity)
+                    frames = []
+                    for _ in range(capture_count):
+                        if self._cancel_requested.is_set():
+                            raise ResetCancelled("Cancellation requested during object capture")
+                        before = self.robot.read_state()
+                        if np.max(np.abs(before.joint_velocities)) > scan_velocity:
+                            break
+                        pair = camera.capture_pair() if camera.view == "stereo" else [camera.capture()]
+                        if (len(pair) != (2 if camera.view == "stereo" else 1)
+                                or any(frame.serial != str(config.camera["serial"]) for frame in pair)):
+                            raise ValueError("Object scan does not match the configured camera")
+                        after = self.robot.read_state()
+                        if np.max(np.abs(after.joint_velocities)) > scan_velocity:
+                            break
+                        frames.extend(pair)
+                    if len(frames) != capture_count * (2 if camera.view == "stereo" else 1):
+                        self._record("object_capture_restarted", reason="Arm moving during capture")
+                        continue
+                    base_tool = after.tool_pose
                     if "tool_left_camera_pose" in config.camera:
                         tool_left = pose_to_transform(config.camera["tool_left_camera_pose"])
                     elif self.calibration is not None and "tool_left_camera" in self.calibration.record:
@@ -436,7 +463,9 @@ class ResetManager:
                 coarse_timestamp = obj.observed_at
                 self._state["phase"] = "observing"
                 try:
-                    self.observe(detect_objects=True, object_ids=(object_id,))
+                    options = {} if self.station_config is None else self.station_config.data.get("reset", {})
+                    self.observe(detect_objects=True, object_ids=(object_id,),
+                                 capture_count=options.get("scan_capture_count", 5))
                 finally:
                     self._state["phase"] = "executing"
                 if obj.pose is None:
