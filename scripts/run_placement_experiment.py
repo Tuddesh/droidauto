@@ -33,6 +33,7 @@ def main():
     parser.add_argument("--runs", type=int, help="Number of placements; default from settings: 10")
     parser.add_argument("--seed", type=int, help="Record/reproduce random staging and cell selection")
     parser.add_argument("--object", dest="object_id", help="Configured object ID; otherwise require exactly one visible cube")
+    parser.add_argument("--scan-buffer", action="store_true", help="Recapture the buffer at home before the first trial")
     parser.add_argument("--review", action="store_true", help="Review each frozen scan interactively instead of running the batch")
     parser.add_argument("--initialize-controllers", action="store_true", help="Explicitly initialize DROID controllers before moving home")
     parser.add_argument("--execute", action="store_true", help="Allow experiment robot motion")
@@ -63,7 +64,9 @@ def main():
             (directory / "settings.json").write_text(json.dumps(settings, indent=2) + "\n")
             calibration = None
             path = config.resolve(config.data["calibration_file"])
-            if path.exists():
+            if args.scan_buffer:
+                print("Buffer: fresh scan at home before the first trial.", flush=True)
+            elif path.exists():
                 try:
                     calibration = BufferCalibration.load(path)
                     calibration.check_config(config)
