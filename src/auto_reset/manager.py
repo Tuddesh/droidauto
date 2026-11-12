@@ -293,12 +293,14 @@ class ResetManager:
         return actions
 
     def reset(self, target_configuration: TargetConfiguration, *, rescan_objects: bool | None = None,
-              use_current_observations: bool = False, detect_buffer: bool = False) -> None:
+              use_current_observations: bool = False, detect_buffer: bool = False,
+              max_manipulations: int | None = None, rescan_buffer_after_action: bool = False) -> None:
         """Observe/compare/execute one manipulation repeatedly until the target is measured.
 
         Every completed manipulation returns to the starting observation pose.
         The next full scene observation determines the next action, including
-        retries of misplaced objects. There is no fixed manipulation limit.
+        retries of misplaced objects. By default there is no manipulation limit;
+        experiments can cap attempts and return the fresh measured result.
         Caller-supplied observations may seed only the first iteration; later
         iterations always capture fresh images with the existing station camera.
         """
@@ -314,6 +316,9 @@ class ResetManager:
             try:
                 if self.robot is None:
                     raise ValueError("Reset execution needs a connected robot backend")
+                if max_manipulations is not None and (isinstance(max_manipulations, bool)
+                        or not isinstance(max_manipulations, int) or max_manipulations < 1):
+                    raise ValueError("max_manipulations must be a positive integer or None")
                 if self.camera is None or self.station_config is None:
                     raise ValueError("Feedback reset requires an open station camera and configuration for rescanning")
                 if self.target_configuration.buffer_id != self.buffer.object_id:
@@ -333,6 +338,7 @@ class ResetManager:
                 if rescan_objects is None:
                     rescan_objects = options.get("rescan_before_pick", True)
                 self._record("reset_started", observation_tool_pose=observation_tool_pose.tolist(),
+                             max_manipulations=max_manipulations,
                              targets={key: value.tolist() for key, value in self.target_configuration.poses.items()})
                 while True:
                     if self._cancel_requested.is_set():
@@ -344,7 +350,8 @@ class ResetManager:
                         self._record("initial_observations_used", scene=self.observe())
                     else:
                         self.observe(detect_objects=True,
-                                     detect_buffer=detect_buffer and self._state["iterations"] == 0,
+                                     detect_buffer=(detect_buffer and self._state["iterations"] == 0
+                                                    or rescan_buffer_after_action and self._state["manipulations"] > 0),
                                      object_ids=tuple(self.target_configuration.poses))
                     self._state["iterations"] += 1
                     if self._state["scene_before"] is None:
@@ -354,7 +361,8 @@ class ResetManager:
                     if self._cancel_requested.is_set():
                         raise ResetCancelled("Cancellation requested after scene observation")
                     errors = self._state["object_placement_errors"]
-                    if all(error["within_tolerance"] for error in errors.values()):
+                    if (all(error["within_tolerance"] for error in errors.values())
+                            or max_manipulations is not None and self._state["manipulations"] >= max_manipulations):
                         self._verify(self.target_configuration)
                         break
                     pending = [key for key in self.target_configuration.poses

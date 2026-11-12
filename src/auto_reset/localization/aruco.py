@@ -79,6 +79,7 @@ Inputs and annotated frozen frames are saved for every attempt.
         ids = np.asarray(marker_ids, dtype=np.int32).reshape(-1, 1) if marker_ids else None
         annotated = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         eye = {"timestamp_s": frame.timestamp_s, "markers": [],
+               "image_size_px": [rgb.shape[1], rgb.shape[0]],
                "serial": frame.serial, "matrix": frame.camera_matrix.tolist(),
                "distortion": frame.distortion.tolist(),
                "left_camera_eye": None if frame.left_camera_eye is None else frame.left_camera_eye.tolist(),
