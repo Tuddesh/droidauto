@@ -15,6 +15,7 @@ import numpy as np
 from .buffer_item import BufferItem
 from .items.aruco_tile import ArucoTile
 from scene.physical_object import PhysicalObject
+from scene.transforms import pose_to_transform, transform
 
 
 class LocalizationError(RuntimeError):
@@ -472,6 +473,100 @@ class Buffer(PhysicalObject):
                                       for i, e in zip(eye_ids, eye_errors)},
             }
         return result
+
+    def localize_planar(self, image_rgb, base_camera, surface_z_m, *,
+                        right_buffer=None, right_image_rgb=None, left_camera_right=None):
+        """Fit base X/Y/yaw on a known horizontal surface, returning T_camera_buffer.
+
+        Marker corners are projected onto the surface with calibrated camera
+        rays. Independent marker rotations do not affect their centers. Both
+        eyes contribute; two distinct centers establish the buffer heading.
+        """
+        base_camera = transform(base_camera)
+        if not np.isfinite(surface_z_m):
+            raise ValueError("Buffer surface Z must be finite")
+        views = [(self, image_rgb, base_camera)]
+        if right_buffer is not None:
+            if right_image_rgb is None or left_camera_right is None:
+                raise ValueError("Stereo planar localization needs the right image and mounting transform")
+            views.append((right_buffer, right_image_rgb, base_camera @ transform(left_camera_right)))
+        source, measured, visible, projected_markers = [], [], set(), []
+        for grid, image, base_eye in views:
+            grid.last_localization = grid.last_detection = grid.last_joint_localization = None
+            corners, ids, rejected, indices = grid.aruco_detector.detectMarkersMultiDict(
+                cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2GRAY))
+            selected = [(quad, int(marker_id)) for quad, marker_id, index in zip(
+                corners, [] if ids is None else ids.ravel(), [] if indices is None else indices.ravel())
+                if int(index) == grid._dictionary_index]
+            grid.last_detection = {"ids": [i for _, i in selected],
+                                   "corners": [np.asarray(q).copy() for q, _ in selected],
+                                   "rejected_candidates": len(rejected)}
+            cells = grid.marker_cells()
+            eye_seen = set()
+            for quad, marker_id in selected:
+                if marker_id not in cells:
+                    continue
+                if marker_id in eye_seen:
+                    raise LocalizationError(f"marker {marker_id} appears more than once in the image")
+                eye_seen.add(marker_id)
+                pixels = np.asarray(quad, dtype=np.float64).reshape(4, 2)
+                normalized = cv2.undistortPoints(pixels[:, None, :], grid.camera_matrix,
+                                               grid.distortion_coefficients).reshape(-1, 2)
+                rays = np.c_[normalized, np.ones(4)] @ base_eye[:3, :3].T
+                if np.any(np.abs(rays[:, 2]) < 1e-12):
+                    raise LocalizationError("A buffer corner ray is parallel to the surface")
+                distances = (surface_z_m - base_eye[2, 3]) / rays[:, 2]
+                if np.any(distances <= 0):
+                    raise LocalizationError("The buffer surface lies behind a camera ray")
+                base_points = base_eye[:3, 3] + rays * distances[:, None]
+                column, row = cells[marker_id]
+                center = grid.cell_center_m(column, row)[:2]
+                projected_markers.append((grid, marker_id, base_points))
+                if self.marker_orientation == "independent":
+                    source.append(center)
+                    measured.append(base_points[:, :2].mean(axis=0))
+                else:
+                    half = grid.item_at(column, row).marker_size_mm / 2000
+                    square = np.array([[-half, half], [half, half], [half, -half], [-half, -half]])
+                    source.extend(square + center)
+                    measured.extend(base_points[:, :2])
+                visible.add(marker_id)
+        if len(visible) < (2 if self.marker_orientation == "independent" else 1):
+            raise LocalizationError("Not enough distinct buffer markers for planar localization")
+        source, measured = np.asarray(source), np.asarray(measured)
+        source_center, measured_center = source.mean(axis=0), measured.mean(axis=0)
+        u, _, vt = np.linalg.svd((source - source_center).T @ (measured - measured_center))
+        rotation = vt.T @ np.diag([1, np.linalg.det(vt.T @ u.T)]) @ u.T
+        translation = measured_center - rotation @ source_center
+        yaw = float(np.arctan2(rotation[1, 0], rotation[0, 0]))
+        base_buffer = pose_to_transform([*translation, surface_z_m, 0, 0, yaw])
+        angles = {}
+        for _, marker_id, points in projected_markers:
+            edge = points[1, :2] - points[0, :2]
+            angles.setdefault(marker_id, []).append(np.arctan2(edge[1], edge[0]) - yaw)
+        marker_yaws = {str(i): float(np.degrees(np.arctan2(np.sin(a).mean(), np.cos(a).mean())))
+                       for i, a in angles.items()}
+        if self.marker_orientation == "aligned":
+            marker_yaws = {str(i): 0.0 for i in visible}
+        squared_error, point_count = 0.0, 0
+        for grid, _, base_eye in views:
+            eye_ids = [i for i in grid.last_detection["ids"] if i in visible]
+            if not eye_ids:
+                continue
+            grid.last_localization = {
+                "visible_marker_ids": sorted(eye_ids), "marker_yaw_degrees": marker_yaws,
+                "orientation_mode": self.marker_orientation, "pose_source": "planar",
+            }
+            rms = grid.reprojection_rms(np.linalg.inv(base_eye) @ base_buffer)
+            grid.last_localization["reprojection_rms_px"] = rms
+            squared_error += rms ** 2 * len(eye_ids) * 4
+            point_count += len(eye_ids) * 4
+        self.last_joint_localization = {
+            "visible_marker_ids": sorted(visible), "marker_yaw_degrees": marker_yaws,
+            "reprojection_rms_px": float(np.sqrt(squared_error / point_count)),
+            "pose_source": "planar", "base_buffer": base_buffer.tolist(),
+        }
+        return np.linalg.inv(base_camera) @ base_buffer
 
     def reprojection_rms(self, camera_buffer: np.ndarray) -> float:
         """Evaluate a pose against the last detected corners and estimated yaws."""

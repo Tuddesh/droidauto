@@ -35,6 +35,11 @@ class StationConfig:
         self.data = json.loads(self.path.read_text())
         self.layout = self.data["buffer"]
         self.camera = self.data.get("camera", {})
+        planar = self.data.get("planar_scene")
+        if planar is not None:
+            for key in ("table_z_m", "buffer_surface_height_m"):
+                if isinstance(planar[key], bool) or not math.isfinite(planar[key]):
+                    raise ValueError(f"planar_scene.{key} must be finite metres")
         self.layout.setdefault("marker_orientation", "independent")
         # One detector per station, shared by buffer fits and scene observation.
         self.aruco_dictionary_names = tuple(dict.fromkeys(
@@ -143,6 +148,19 @@ class StationConfig:
                 target.set_cell(object_id, buffer, column, row,
                                 yaw=placement.get("yaw_rad", 0.0), scene_object=objects[object_id],
                                 support_height_m=placement["support_height_m"])
+        planar = self.data.get("planar_scene")
+        if planar is not None:
+            cell = buffer.cell_size_mm / 1000
+            low = -np.asarray(buffer.origin) * cell
+            high = (np.array([buffer.columns, buffer.rows]) - buffer.origin) * cell
+            for object_id, pose in list(target.poses.items()):
+                on_buffer = np.all(pose[:2, 3] >= low) and np.all(pose[:2, 3] <= high)
+                support = 0.0 if on_buffer else -float(planar["buffer_surface_height_m"])
+                yaw = float(np.arctan2(pose[1, 0], pose[0, 0]))
+                target.set_pose(object_id, pose_to_transform([
+                    pose[0, 3], pose[1, 3], support + objects[object_id].dimensions_m[2] / 2,
+                    0, 0, yaw,
+                ]))
         return target
 
     def save_marker_binding(self, object_id: str, marker_id: int, dictionary: str) -> None:

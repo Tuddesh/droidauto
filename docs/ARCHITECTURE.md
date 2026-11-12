@@ -59,6 +59,18 @@ are T_buffer_object; grasp transforms are T_object_tool. The tool frame must
 match the frame DROID reports. Cell targets put the geometric center half the
 object height above the explicitly supplied buffer support plane.
 
+With `planar_scene`, Buffer.localize_planar() projects detected marker corners
+through calibrated camera rays onto base Z = -35 mm and fits buffer X/Y/yaw.
+Independently rotated buffer markers are matched by their centers. Cube
+localization similarly projects corners onto the known top-marker plane and
+fits X/Y/yaw, selecting the buffer support surface inside its footprint and the
+table outside it. Roll/pitch and object-center heights come from fixed geometry.
+The same detector and both stereo eyes are reused; one visible cube eye works.
+Supplied observations and requested targets are normalized to these planes.
+Cached calibration and taught targets record the model; incompatible ones must
+be recaptured/re-taught. Legacy free-3D localization remains when no planar
+model is configured.
+
 Pure marker-to-cube geometry remains available on `Cube`; a marker center is
 10 mm outward from the block center along its local top normal. Full edge-aligned
 orientation additionally needs known marker mounting yaw. Object-marker

@@ -204,6 +204,7 @@ class ResetManager:
                         frames, self.aruco_detector, config.aruco_dictionary_names,
                         selected, base_tool @ tool_left, directory,
                         review=config.camera.get("review_capture", False),
+                        planar_scene=config.data.get("planar_scene"), buffer=self.buffer,
                     )
                     report["tool_left_camera"] = tool_left.tolist()
                     self._state["last_observation"] = report
@@ -216,6 +217,12 @@ class ResetManager:
                 self._record("object_detection_failed", reason=str(exc) or type(exc).__name__)
                 raise
         if observations is not None:
+            planar = None if self.station_config is None else self.station_config.data.get("planar_scene")
+            if planar is not None and not detect_objects:
+                buffer_base = np.linalg.inv(self.buffer.pose)
+                local = {key: {"pose": buffer_base @ pose} for key, pose in checked.items()}
+                normalized = self.station_config.make_target(local, self.buffer, self.objects)
+                checked = {key: self.buffer.pose @ pose for key, pose in normalized.poses.items()}
             for key, scene_object in selected.items():
                 if key not in checked:
                     scene_object.mark_unobserved()
@@ -316,6 +323,11 @@ class ResetManager:
                 unknown = set(self.target_configuration.poses) - self.objects.keys()
                 if unknown:
                     raise KeyError(f"Unknown target object(s): {sorted(unknown)}")
+                if self.station_config.data.get("planar_scene") is not None:
+                    self.target_configuration = self.station_config.make_target(
+                        {key: {"pose": pose} for key, pose in self.target_configuration.poses.items()},
+                        self.buffer, self.objects,
+                    )
                 observation_tool_pose = self.robot.read_state().tool_pose.copy()
                 options = self.station_config.data.get("reset", {})
                 if rescan_objects is None:

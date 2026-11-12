@@ -27,6 +27,8 @@ def handle_request(manager, config, request, *, execute=False):
         raise ValueError(f"Unknown operation: {operation}")
     if operation == "reset" and not execute:
         raise ValueError("Reset execution requires --execute")
+    if ("scene" in request and request["scene"].get("planar_scene") != config.data.get("planar_scene")):
+        raise ValueError("Saved scene uses a different height/localization model; teach the target again")
     source = ("supplied" if "observations" in request else "camera"
               if operation in ("observe", "reset") or request.get("detect_objects") else "existing observations")
     manager._record("request_received", operation=operation, object_pose_source=source,

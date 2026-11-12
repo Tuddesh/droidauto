@@ -48,6 +48,8 @@ class BufferCalibration:
         return cls(json.loads(Path(path).read_text()))
 
     def check_config(self, config):
+        if self.record.get("planar_scene") != config.data.get("planar_scene"):
+            raise ValueError("Buffer height/localization model changed; capture a new buffer calibration")
         if self.record["layout_digest"] != config.layout_digest:
             raise ValueError("Buffer layout/localization model changed; capture a new buffer calibration")
         camera = self.record["camera"]
@@ -124,16 +126,15 @@ def meter_buffer_exposure(config, camera):
         return
     frames = camera.capture_pair() if config.camera["view"] == "stereo" else [camera.capture()]
     corners, ids = [], set()
+    grid = config.make_buffer()
+    known = grid.marker_cells()
     for frame in frames:
-        grid = config.make_buffer(frame.camera_matrix, frame.distortion)
-        try:
-            grid.localize(frame.image_rgb)
-        except (ValueError, RuntimeError, cv2.error):
-            pass  # Detections remain available even if pose fitting failed.
-        detection = grid.last_detection or {}
-        for marker_id, points in zip(detection.get("ids", []), detection.get("corners", [])):
-            if marker_id in grid.marker_cells():
-                ids.add(marker_id)
+        detected, marker_ids, _, indices = grid.aruco_detector.detectMarkersMultiDict(
+            cv2.cvtColor(frame.image_rgb, cv2.COLOR_RGB2GRAY))
+        for points, marker_id, index in zip(detected, [] if marker_ids is None else marker_ids.ravel(),
+                                            [] if indices is None else indices.ravel()):
+            if int(index) == grid._dictionary_index and int(marker_id) in known:
+                ids.add(int(marker_id))
                 corners.extend(np.asarray(points).reshape(-1, 2))
     if len(ids) < 2:
         print("Auto exposure uses the full image: insufficient marker detections to infer its region. "
@@ -150,7 +151,7 @@ def meter_buffer_exposure(config, camera):
 
 
 def capture_calibration(config, robot, camera, report=None, review=False) -> BufferCalibration:
-    """Localize each eye of one stationary capture using Buffer.localize().
+    """Localize a stationary capture through Buffer's planar or legacy estimator.
 
     Each eye uses its own intrinsics. The SDK stereo transform puts both
     poses into the left optical frame. Tool mounting is applied afterwards.
@@ -171,11 +172,57 @@ def capture_calibration(config, robot, camera, report=None, review=False) -> Buf
             if len(frames) != len(expected_views) or {frame.view for frame in frames} != expected_views:
                 raise RuntimeError("Captured views do not match the selected camera mode")
 
+            # The stereo baseline does not supply the robot's camera mounting pose.
+            # A known mount can be supplied explicitly; otherwise load measured DROID
+            # hand-eye calibration for the left eye, or derive it from a valid right.
+            if "tool_left_camera_pose" in config.camera:
+                tool_left_camera = pose_to_transform(config.camera["tool_left_camera_pose"])
+                mounting_source = "config.camera.tool_left_camera_pose"
+            else:
+                try:
+                    tool_left_camera = load_hand_eye(config.resolve(config.camera["hand_eye_file"]), frames[0].serial, "left")
+                    mounting_source = f"{frames[0].serial}_left"
+                except (ValueError, OSError, KeyError) as left_error:
+                    right_frame = next((f for f in frames if f.view == "right"), None)
+                    try:
+                        if right_frame is None or right_frame.left_camera_eye is None:
+                            raise ValueError("No right-eye stereo geometry available")
+                        tool_right_camera = load_hand_eye(config.resolve(config.camera["hand_eye_file"]), frames[0].serial, "right")
+                        tool_left_camera = tool_right_camera @ np.linalg.inv(transform(right_frame.left_camera_eye))
+                        mounting_source = f"{frames[0].serial}_right + zed_sdk_rectified"
+                    except (ValueError, OSError, KeyError) as right_error:
+                        raise ValueError("Stereo localization succeeded, but robot-frame calibration needs a valid "
+                                         "camera-to-tool mounting transform. Supply camera.tool_left_camera_pose "
+                                         f"[x,y,z,roll,pitch,yaw] in metres/radians or measured DROID hand-eye data. "
+                                         f"Left: {left_error}; right: {right_error}") from right_error
+            planar = config.data.get("planar_scene")
             accepted, eyes = [], {}
             grids = {frame.view: config.make_buffer(frame.camera_matrix, frame.distortion) for frame in frames}
             joint_pose = None
             joint_error = None
-            if stereo and config.layout["marker_orientation"] == "independent":
+            if planar is not None:
+                reference = next((f for f in frames if f.view == "left"), frames[0])
+                left_reference = (np.eye(4) if reference.left_camera_eye is None and reference.view == "left"
+                                  else transform(reference.left_camera_eye))
+                try:
+                    right = next((f for f in frames if f.view == "right"), None) if stereo else None
+                    candidate = grids[reference.view].localize_planar(
+                        reference.image_rgb, base_tool @ tool_left_camera @ left_reference,
+                        float(planar["table_z_m"]) + float(planar["buffer_surface_height_m"]),
+                        right_buffer=None if right is None else grids[right.view],
+                        right_image_rgb=None if right is None else right.image_rgb,
+                        left_camera_right=None if right is None else right.left_camera_eye,
+                    )
+                    joint_quality = grids[reference.view].last_joint_localization
+                    if len(joint_quality["visible_marker_ids"]) < config.camera["min_visible_markers"]:
+                        raise ValueError("Planar capture has fewer distinct known markers than configured")
+                    joint_pose = left_reference @ candidate
+                    if report is not None:
+                        report.data["stereo_fit"] = {"mode": "planar", **joint_quality}
+                except (RuntimeError, ValueError, cv2.error) as exc:
+                    joint_error = str(exc)
+                    print(f"Planar fit unavailable: {exc}", flush=True)
+            elif stereo and config.layout["marker_orientation"] == "independent":
                 left_frame = next(frame for frame in frames if frame.view == "left")
                 right_frame = next(frame for frame in frames if frame.view == "right")
                 try:
@@ -209,11 +256,14 @@ def capture_calibration(config, robot, camera, report=None, review=False) -> Buf
                     print(f"Localizing buffer in {frame.view} eye...", flush=True)
                     try:
                         if joint_pose is None:
+                            if planar is not None:
+                                raise ValueError(joint_error or "Planar buffer fit is unavailable")
                             camera_buffer = grid.localize(frame.image_rgb)
                         elif grid.last_localization is None:
                             raise ValueError("No known markers detected in this eye; using the other eye")
                         else:
-                            camera_buffer = np.linalg.inv(transform(frame.left_camera_eye)) @ joint_pose
+                            camera_buffer = np.linalg.inv(np.eye(4) if frame.left_camera_eye is None and frame.view == "left"
+                                                         else transform(frame.left_camera_eye)) @ joint_pose
                     finally:
                         if report is not None:
                             report.localized(grid, frame.view)
@@ -298,29 +348,6 @@ def capture_calibration(config, robot, camera, report=None, review=False) -> Buf
             if report is not None:
                 report.data["left_buffer"] = left_buffer.tolist()
                 report.data["accepted_views"] = [f.view for f, _, _, _ in accepted]
-            # The stereo baseline does not supply the robot's camera mounting pose.
-            # A known mount can be supplied explicitly; otherwise load measured DROID
-            # hand-eye calibration for the left eye, or derive it from a valid right.
-            if "tool_left_camera_pose" in config.camera:
-                tool_left_camera = pose_to_transform(config.camera["tool_left_camera_pose"])
-                mounting_source = "config.camera.tool_left_camera_pose"
-            else:
-                try:
-                    tool_left_camera = load_hand_eye(config.resolve(config.camera["hand_eye_file"]), frame.serial, "left")
-                    mounting_source = f"{frame.serial}_left"
-                except (ValueError, OSError, KeyError) as left_error:
-                    right_frame = next((f for f in frames if f.view == "right"), None)
-                    try:
-                        if right_frame is None or right_frame.left_camera_eye is None:
-                            raise ValueError("No right-eye stereo geometry available")
-                        tool_right_camera = load_hand_eye(config.resolve(config.camera["hand_eye_file"]), frame.serial, "right")
-                        tool_left_camera = tool_right_camera @ np.linalg.inv(transform(right_frame.left_camera_eye))
-                        mounting_source = f"{frame.serial}_right + zed_sdk_rectified"
-                    except (ValueError, OSError, KeyError) as right_error:
-                        raise ValueError("Stereo localization succeeded, but robot-frame calibration needs a valid "
-                                         "camera-to-tool mounting transform. Supply camera.tool_left_camera_pose "
-                                         f"[x,y,z,roll,pitch,yaw] in metres/radians or measured DROID hand-eye data. "
-                                         f"Left: {left_error}; right: {right_error}") from right_error
             base_buffer = base_tool @ tool_left_camera @ left_buffer
             tool_camera = tool_left_camera @ left_camera_reference
             # Store the fused pose expressed in the reference eye for the existing
@@ -333,12 +360,12 @@ def capture_calibration(config, robot, camera, report=None, review=False) -> Buf
                 "accepted_views": [f.view for f, _, _, _ in accepted],
                 "reference_view": frame.view,
                 "stereo_agreement": agreement,
-                "pose_source": "joint_stereo" if joint_pose is not None else "monocular_or_fused",
+                "pose_source": "planar" if planar is not None else "joint_stereo" if joint_pose is not None else "monocular_or_fused",
             }
             result = BufferCalibration({
                 "version": 1, "created_at_s": time.time(), "image_timestamp_s": frame.timestamp_s,
                 "robot_timestamps": robot_timestamps, "stationarity": "operator_confirmed", "layout": config.layout,
-                "layout_digest": config.layout_digest, "base_buffer": base_buffer.tolist(),
+                "layout_digest": config.layout_digest, "planar_scene": planar, "base_buffer": base_buffer.tolist(),
                 "base_tool": base_tool.tolist(), "tool_camera": tool_camera.tolist(),
                 "camera_buffer": camera_buffer.tolist(), "eyes": eyes,
                 "hand_eye_file": str(config.resolve(config.camera["hand_eye_file"])),

@@ -131,6 +131,7 @@ def main():
                         "name": name,
                         "created_at": datetime.now(timezone.utc).isoformat(),
                         "reference_frame": "buffer",
+                        "planar_scene": config.data.get("planar_scene"),
                         "buffer_id": target.buffer_id,
                         "station_config": str(config.path),
                         "buffer_calibration": manager.calibration.record,

@@ -3,6 +3,7 @@
 The caller owns capture, robot feedback and the shared OpenCV detector. This
 adapter fits one marker pose jointly across the available eyes, then uses the
 cube's existing marker-mount conversion to produce its robot-base center pose.
+The planar mode fixes support heights and fits only base X/Y/yaw using camera rays.
 """
 
 import json
@@ -17,7 +18,7 @@ from scene.transforms import transform, transform_to_pose
 
 
 def localize_cubes(frames, detector, dictionary_names, objects, base_left_camera,
-                   directory, *, review=False):
+                   directory, *, review=False, planar_scene=None, buffer=None):
     """Return (base-frame cube poses, diagnostics); poses=None requests a retake.
 
 Only explicitly bound dictionary/ID pairs are matched. Missing, duplicated or
@@ -127,30 +128,71 @@ Inputs and annotated frozen frames are saved for every attempt.
             for frame, measured, camera_left in observations
         ])
         try:
-            seeds = []
-            for frame, measured, camera_left in observations:
-                success, rotations, translations, _ = cv2.solvePnPGeneric(
-                    points, measured, frame.camera_matrix, frame.distortion,
-                    flags=cv2.SOLVEPNP_IPPE_SQUARE,
-                )
-                if not success:
-                    continue
-                for rotation, translation in zip(rotations, translations):
-                    camera_marker = np.eye(4)
-                    camera_marker[:3, :3] = cv2.Rodrigues(rotation)[0]
-                    camera_marker[:3, 3] = translation.ravel()
-                    left_marker = np.linalg.inv(camera_left) @ camera_marker
-                    seeds.append(np.r_[cv2.Rodrigues(left_marker[:3, :3])[0].ravel(),
-                                          left_marker[:3, 3]])
-            if not seeds:
-                raise ValueError("No marker pose could be solved")
-            seed = min(seeds, key=lambda values: np.sum(residual(values) ** 2))
-            fit = least_squares(residual, seed, method="lm")
-            if not fit.success or not np.isfinite(fit.x).all():
-                raise ValueError(f"Marker pose fit failed: {fit.message}")
-            left_marker = np.eye(4)
-            left_marker[:3, :3] = cv2.Rodrigues(fit.x[:3])[0]
-            left_marker[:3, 3] = fit.x[3:]
+            if planar_scene is not None:
+                if buffer is None or buffer.pose is None or buffer.pose_frame != "base":
+                    raise ValueError("Planar cube localization requires the buffer pose in base coordinates")
+                table_z = float(planar_scene["table_z_m"])
+                buffer_z = table_z + float(planar_scene["buffer_surface_height_m"])
+                origins, directions = [], []
+                for frame, measured, camera_left in observations:
+                    base_eye = base_left_camera @ np.linalg.inv(camera_left)
+                    normalized = cv2.undistortPoints(measured[:, None, :], frame.camera_matrix,
+                                                   frame.distortion).reshape(-1, 2)
+                    rays = np.c_[normalized, np.ones(4)] @ base_eye[:3, :3].T
+                    origins.extend([base_eye[:3, 3]] * 4)
+                    directions.extend(rays)
+                origins, directions = np.asarray(origins), np.asarray(directions)
+                if np.any(np.abs(directions[:, 2]) < 1e-12):
+                    raise ValueError("A cube corner ray is parallel to the support plane")
+                marker_z = buffer_z + obj.dimensions_m[2]
+                distances = (marker_z - origins[:, 2]) / directions[:, 2]
+                projected = origins + directions * distances[:, None]
+                candidate = np.r_[projected.mean(axis=0), 1.0]
+                in_buffer = np.linalg.inv(buffer.pose) @ candidate
+                cell_size = buffer.cell_size_mm / 1000
+                low = -np.asarray(buffer.origin) * cell_size
+                high = (np.array([buffer.columns, buffer.rows]) - buffer.origin) * cell_size
+                support = "buffer" if np.all(in_buffer[:2] >= low) and np.all(in_buffer[:2] <= high) else "table"
+                support_z = buffer_z if support == "buffer" else table_z
+                marker_z = support_z + obj.dimensions_m[2]
+                distances = (marker_z - origins[:, 2]) / directions[:, 2]
+                if np.any(distances <= 0):
+                    raise ValueError("The cube marker plane lies behind a camera ray")
+                measured_base = (origins + directions * distances[:, None])[:, :2]
+                template = np.tile(points[:, :2], (len(observations), 1))
+                center = measured_base.mean(axis=0)
+                u, _, vt = np.linalg.svd(template.T @ (measured_base - center))
+                rotation = vt.T @ np.diag([1, np.linalg.det(vt.T @ u.T)]) @ u.T
+                base_marker = np.eye(4)
+                base_marker[:2, :2] = rotation
+                base_marker[:3, 3] = [*center, marker_z]
+                left_marker = np.linalg.inv(base_left_camera) @ base_marker
+                result.update(pose_source="planar", support_surface=support, support_z_m=support_z)
+            else:
+                seeds = []
+                for frame, measured, camera_left in observations:
+                    success, rotations, translations, _ = cv2.solvePnPGeneric(
+                        points, measured, frame.camera_matrix, frame.distortion,
+                        flags=cv2.SOLVEPNP_IPPE_SQUARE,
+                    )
+                    if not success:
+                        continue
+                    for rotation, translation in zip(rotations, translations):
+                        camera_marker = np.eye(4)
+                        camera_marker[:3, :3] = cv2.Rodrigues(rotation)[0]
+                        camera_marker[:3, 3] = translation.ravel()
+                        left_marker = np.linalg.inv(camera_left) @ camera_marker
+                        seeds.append(np.r_[cv2.Rodrigues(left_marker[:3, :3])[0].ravel(),
+                                              left_marker[:3, 3]])
+                if not seeds:
+                    raise ValueError("No marker pose could be solved")
+                seed = min(seeds, key=lambda values: np.sum(residual(values) ** 2))
+                fit = least_squares(residual, seed, method="lm")
+                if not fit.success or not np.isfinite(fit.x).all():
+                    raise ValueError(f"Marker pose fit failed: {fit.message}")
+                left_marker = np.eye(4)
+                left_marker[:3, :3] = cv2.Rodrigues(fit.x[:3])[0]
+                left_marker[:3, 3] = fit.x[3:]
             for frame, _, camera_left in observations:
                 camera_marker = camera_left @ left_marker
                 depths = (points @ camera_marker[:3, :3].T + camera_marker[:3, 3])[:, 2]
@@ -159,7 +201,8 @@ Inputs and annotated frozen frames are saved for every attempt.
             base_marker = base_left_camera @ left_marker
             base_cube = obj.pose_from_marker(base_marker)
             poses[obj.object_id] = base_cube
-            errors = residual(fit.x).reshape(-1, 4, 2)
+            values = np.r_[cv2.Rodrigues(left_marker[:3, :3])[0].ravel(), left_marker[:3, 3]]
+            errors = residual(values).reshape(-1, 4, 2)
             result.pop("error", None)
             result.update(base_marker=base_marker.tolist(), base_cube=base_cube.tolist(),
                           base_xyz_m=base_cube[:3, 3].tolist(),

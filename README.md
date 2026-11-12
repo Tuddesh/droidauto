@@ -14,6 +14,10 @@ pose and source image; subsequent resets reuse that fixed pose.
 - Cube: **40 x 40 x 20 mm**, centered **40 mm** top marker,
   **DICT_ARUCO_ORIGINAL / ID 5**, aligned with the cube edges. Origin is the geometric center.
 - Camera and supplied object observations use the **robot base frame**; the buffer is detected.
+- `planar_scene` fixes the table at base Z = -40 mm and the buffer marker/support
+  surface 5 mm above it. Localization fits X/Y/yaw only, using both stereo eyes.
+  Cube centers are at -30 mm on the table and -25 mm inside the buffer footprint;
+  roll/pitch are zero. Targets use the same geometry, without an extra 5 mm offset.
 - Targets are object poses in **buffer coordinates**, or free buffer cells with
   an explicit support-plane height.
 - Configured grasps are **T_object_tool**, using DROID's actual reported tool
@@ -122,6 +126,9 @@ objects must be detected; `--objects cube-1` selects a subset and `--scan-buffer
 refreshes a moved buffer. Targets are buffer-relative and stored under ignored
 `runs/scenes/<name>/reset.json`, with capture diagnostics. The script prints the
 reset command and sends no movement or controller-initialization commands.
+After changing the height model, reteach the scene; the teacher replaces an
+incompatible buffer calibration after a new reviewed capture. Old 3D scenes are
+rejected when loading a planar target.
 
 For persistent manager state, omit `--request` and send one JSON request per
 stdin line. `--execute` enables the robot connection and `reset` requests:
