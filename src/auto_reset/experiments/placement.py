@@ -177,6 +177,8 @@ class PlacementExperiment:
                     raise ResetCancelled("Experiment cancelled before staging transfer")
                 manager.reset(stage)
                 events.emit("staging_measured", trial=trial, scene=dict(manager.state)["scene_after"])
+                print(f"Trial {trial}/{self.runs}: rescanning buffer and cube before placement...", flush=True)
+                manager.observe(detect_buffer=True, detect_objects=True, object_ids=(object_id,))
                 free_cells = [(column, row) for column in range(manager.buffer.columns)
                               for row in range(manager.buffer.rows) if manager.buffer.item_at(column, row) is None]
                 target = None
@@ -201,7 +203,8 @@ class PlacementExperiment:
                 if manager._cancel_requested.is_set():
                     raise ResetCancelled("Experiment cancelled before placement")
                 started = time.monotonic()
-                manager.reset(target, max_manipulations=1, rescan_buffer_after_action=True)
+                manager.reset(target, use_current_observations=True, max_manipulations=1,
+                              rescan_buffer_after_action=True)
                 state = dict(manager.state)
                 observed = cube.pose is not None
                 dx = dy = distance = angle = None
