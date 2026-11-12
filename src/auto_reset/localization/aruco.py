@@ -23,7 +23,9 @@ def localize_cubes(frames, detector, dictionary_names, objects, base_left_camera
 Only explicitly bound dictionary/ID pairs are matched. Missing, duplicated or
 unfittable markers leave their cube unobserved. Stereo uses both eyes' corners
 in one reprojection fit; one visible eye also works. No RMS rejection threshold
-is imposed. Inputs and annotated frozen frames are saved for every attempt.
+is imposed. Missing configured markers are retried at larger image scales in
+each eye using the same detector. All fitted corners use native image coordinates.
+Inputs and annotated frozen frames are saved for every attempt.
 """
     base_left_camera = transform(base_left_camera)
     directory.mkdir(parents=True, exist_ok=True)
@@ -48,12 +50,38 @@ is imposed. Inputs and annotated frozen frames are saved for every attempt.
         rgb = frame.image_rgb
         gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
         corners, ids, rejected, indices = detector.detectMarkersMultiDict(gray)
+        corners = list(corners)
+        marker_ids = [] if ids is None else ids.ravel().tolist()
+        dictionary_indices = [] if indices is None else indices.ravel().tolist()
+        scales = [1] * len(marker_ids)
+        passes = [{"scale": 1, "rejected_candidates": len(rejected)}]
+        seen = {(dictionary_names[int(index)], int(marker_id))
+                for marker_id, index in zip(marker_ids, dictionary_indices)}
+        for scale in (2, 3):
+            missing = bindings.keys() - seen
+            if not missing:
+                break
+            enlarged = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+            extra_corners, extra_ids, extra_rejected, extra_indices = detector.detectMarkersMultiDict(enlarged)
+            passes.append({"scale": scale, "rejected_candidates": len(extra_rejected)})
+            for quad, marker_id, index in zip(
+                    extra_corners, [] if extra_ids is None else extra_ids.ravel(),
+                    [] if extra_indices is None else extra_indices.ravel()):
+                key = (dictionary_names[int(index)], int(marker_id))
+                if key in missing:
+                    # Undo resize's pixel-center mapping before pose estimation.
+                    corners.append(((np.asarray(quad) + 0.5) / scale - 0.5).astype(np.float32))
+                    marker_ids.append(int(marker_id))
+                    dictionary_indices.append(int(index))
+                    scales.append(scale)
+                    seen.add(key)
+        ids = np.asarray(marker_ids, dtype=np.int32).reshape(-1, 1) if marker_ids else None
         annotated = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         eye = {"timestamp_s": frame.timestamp_s, "markers": [],
                "serial": frame.serial, "matrix": frame.camera_matrix.tolist(),
                "distortion": frame.distortion.tolist(),
                "left_camera_eye": None if frame.left_camera_eye is None else frame.left_camera_eye.tolist(),
-               "rejected_candidates": len(rejected)}
+               "rejected_candidates": len(rejected), "detection_passes": passes}
         report["eyes"][frame.view] = eye
         overlays[frame.view] = annotated
         if ids is not None:
@@ -65,13 +93,12 @@ is imposed. Inputs and annotated frozen frames are saved for every attempt.
                 continue
             left_eye = np.eye(4)
         camera_left = np.linalg.inv(transform(left_eye))
-        for points, marker_id, index in zip(corners, [] if ids is None else ids.ravel(),
-                                            [] if indices is None else indices.ravel()):
+        for points, marker_id, index, scale in zip(corners, marker_ids, dictionary_indices, scales):
             dictionary = dictionary_names[int(index)]
             marker_id = int(marker_id)
             points = np.asarray(points, dtype=np.float64).reshape(4, 2)
             eye["markers"].append({"dictionary": dictionary, "id": marker_id,
-                                    "corners": points.tolist()})
+                                    "corners": points.tolist(), "detection_scale": scale})
             location = tuple(np.round(points[0]).astype(int))
             cv2.putText(annotated, f"{dictionary}:{marker_id}", location,
                         cv2.FONT_HERSHEY_SIMPLEX, .45, (0, 255, 0), 1, cv2.LINE_AA)

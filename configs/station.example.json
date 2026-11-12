@@ -102,6 +102,87 @@
         "grasp_center_z_m": 0.0,
         "grasp_yaw_rad": 0.0
       }
+    },
+    {
+      "type": "cube",
+      "object_id": "cube-2",
+      "dimensions_m": [
+        0.04,
+        0.04,
+        0.02
+      ],
+      "marker": {
+        "face": "top",
+        "id": 3,
+        "size_m": 0.037,
+        "center_xy_m": [
+          0.0,
+          0.0
+        ],
+        "yaw_rad": 0.0,
+        "family": "5x5",
+        "dictionary": "DICT_ARUCO_ORIGINAL"
+      },
+      "grasps": [],
+      "manipulation": {
+        "tool_to_grasp_m": 0.167,
+        "grasp_center_z_m": 0.0,
+        "grasp_yaw_rad": 0.0
+      }
+    },
+    {
+      "type": "cube",
+      "object_id": "cube-3",
+      "dimensions_m": [
+        0.04,
+        0.04,
+        0.02
+      ],
+      "marker": {
+        "face": "top",
+        "id": 26,
+        "size_m": 0.037,
+        "center_xy_m": [
+          0.0,
+          0.0
+        ],
+        "yaw_rad": 0.0,
+        "family": "5x5",
+        "dictionary": "DICT_ARUCO_ORIGINAL"
+      },
+      "grasps": [],
+      "manipulation": {
+        "tool_to_grasp_m": 0.167,
+        "grasp_center_z_m": 0.0,
+        "grasp_yaw_rad": 0.0
+      }
+    },
+    {
+      "type": "cube",
+      "object_id": "cube-4",
+      "dimensions_m": [
+        0.04,
+        0.04,
+        0.02
+      ],
+      "marker": {
+        "face": "top",
+        "id": 27,
+        "size_m": 0.037,
+        "center_xy_m": [
+          0.0,
+          0.0
+        ],
+        "yaw_rad": 0.0,
+        "family": "5x5",
+        "dictionary": "DICT_ARUCO_ORIGINAL"
+      },
+      "grasps": [],
+      "manipulation": {
+        "tool_to_grasp_m": 0.167,
+        "grasp_center_z_m": 0.0,
+        "grasp_yaw_rad": 0.0
+      }
     }
   ],
   "reset": {
