@@ -35,6 +35,7 @@ def main():
     parser.add_argument("--object", dest="object_id", help="Configured cube; otherwise choose the single visible cube")
     parser.add_argument("--pairs", type=int, default=10, help="Stereo pairs to save; default: 10")
     parser.add_argument("--move-to-scan", action="store_true", help="Move to the existing measuring pose after confirmation")
+    parser.add_argument("--initialize-controllers", action="store_true", help="Initialize DROID controllers before capture or scan motion")
     args = parser.parse_args()
     if args.pairs < 1:
         parser.error("--pairs must be positive")
@@ -68,6 +69,8 @@ def main():
             print(f"Saving experiment to: {directory}", flush=True)
             (directory / "buffer_reference.json").write_text(json.dumps(calibration.record, indent=2) + "\n")
             robot = stack.enter_context(DroidRobot(config.data["robot_endpoint"], ik_config=config.data.get("ik")))
+            if args.initialize_controllers:
+                robot.initialize()
             camera = stack.enter_context(ZedWristCamera(
                 str(config.camera["serial"]), config.camera["view"],
                 auto_exposure_roi=config.camera.get("auto_exposure_roi")))

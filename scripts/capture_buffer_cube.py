@@ -30,6 +30,7 @@ def main():
     parser.add_argument("--config", type=Path,
                         default=default if default.exists() else ROOT / "configs/station.example.json")
     parser.add_argument("--object", dest="object_id", help="Limit capture to one configured cube")
+    parser.add_argument("--initialize-controllers", action="store_true", help="Initialize DROID controllers before capture")
     args = parser.parse_args()
     directory = None
     try:
@@ -52,6 +53,8 @@ def main():
             stack.callback(log.close)
             print(f"Saving experiment to: {directory}", flush=True)
             robot = stack.enter_context(DroidRobot(config.data["robot_endpoint"]))
+            if args.initialize_controllers:
+                robot.initialize()
             camera = stack.enter_context(ZedWristCamera(
                 str(config.camera["serial"]), config.camera["view"],
                 auto_exposure_roi=config.camera.get("auto_exposure_roi")))
