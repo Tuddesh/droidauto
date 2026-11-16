@@ -2,7 +2,8 @@
 """Launch a one-cube placement experiment using the existing station framework.
 
 The experiment stages the visible cube on the table, measures one placement
-into a random free cell, and repeats. --execute and a start confirmation are
+into a random free cell (or the next cell of the settings' target_cells list)
+from DROID-home, and repeats. --execute and a start confirmation are
 required. Camera and CUDA solver instances are reused across all trials.
 """
 
@@ -51,6 +52,9 @@ def main():
         print(f"Placement experiment: {runs} trials, one cube, random free buffer cells.")
         print(f"Cube: {args.object_id or 'automatically choose the single visible cube'}")
         print(f"Table X/Y bounds (base metres): {settings['table_bounds_xy_m']}")
+        cells = settings.get("target_cells")
+        print("Target cells: " + ("random free reachable cell" if cells is None
+                                  else f"{cells}, in this order, repeated as needed"))
         print("The arm will move to DROID-home, randomize the cube on the table, and perform the trials.")
         choice = input("Enter to start, q to cancel> ").strip().lower()
         if choice:
@@ -88,7 +92,8 @@ def main():
             experiment = PlacementExperiment(manager=manager, home_joints=settings["home_joints_rad"],
                                              table_bounds_xy_m=settings["table_bounds_xy_m"],
                                              output_directory=directory, runs=runs,
-                                             object_id=args.object_id, seed=args.seed)
+                                             object_id=args.object_id, seed=args.seed,
+                                             target_cells=settings.get("target_cells"))
             summary = experiment.run()
             print(f"Completed {summary['completed_trials']} trials; {summary['placement_successes']} within tolerance.")
             print(f"Mean XY error: {summary['mean_xy_error_mm']} mm\nResults: {directory}")

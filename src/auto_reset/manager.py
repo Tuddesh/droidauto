@@ -449,9 +449,13 @@ class ResetManager:
             self._state["current_action"] = {"index": index, **action}
             self._record("action_started", **self._state["current_action"])
             kind = action["type"]
+            reached = {}
             if kind == "move":
                 self.robot.command_joints(action["joints"], blocking=True)
                 self.robot.wait_until_stopped(timeout_s=self.motion_timeout_s)
+                # Where the arm settled, for comparison with the commanded endpoint.
+                state = self.robot.read_state()
+                reached = {"reached_tool_pose": state.tool_pose.tolist(), "reached_joints": state.joints.tolist()}
             elif kind == "open_gripper":
                 self.robot.open_gripper()
             elif kind == "close_gripper":
@@ -479,7 +483,7 @@ class ResetManager:
                     self._record("object_pose_refined", object_id=object_id, pose=obj.pose.tolist())
             else:
                 raise ValueError(f"Unknown reset action: {kind}")
-            self._record("action_finished", index=index, name=action["name"])
+            self._record("action_finished", index=index, name=action["name"], **reached)
         if self._cancel_requested.is_set():
             raise ResetCancelled("Cancellation requested after final command")
 

@@ -155,9 +155,15 @@ python scripts/run_placement_experiment.py --execute
 
 It moves to the saved DROID-home joints and selects the single visible configured
 cube. Each of ten trials stages it at a random reachable table pose visible from
-home, places it once into a random free, reachable buffer cell, then rescans the
-buffer and cube. Signed X/Y errors, XY distance and yaw error are measured before
-any corrective transfer. Normal scene resets retain their unlimited feedback loop.
+home, places it once into a random free, reachable buffer cell, then returns to
+the home joints and rescans the buffer and cube. Signed X/Y errors, XY distance
+and yaw error are measured from home before any corrective transfer. The home
+joints are also commanded before each placement, so the arm's stopping error
+cannot accumulate into a drifting observation pose. To use the same cells in
+every run, set `target_cells` in the settings to a list of `[column, row]` pairs;
+trial *n* uses entry *n* (cycling), and staging poses are resampled until that
+cell is reachable. Normal scene resets retain their unlimited feedback loop.
+Every executed move logs the reached flange pose and joints in `action_finished`.
 
 `--initialize-controllers` explicitly initializes controllers; `--review` enables
 frozen scan review. `--runs`, `--seed` and `--object cube-1` override selection.
