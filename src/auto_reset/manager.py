@@ -326,8 +326,10 @@ class ResetManager:
 
         Every completed manipulation returns to the starting observation pose.
         The next full scene observation determines the next action, including
-        retries of misplaced objects. By default there is no manipulation limit;
-        experiments can cap attempts and return the fresh measured result.
+        retries of misplaced objects. Each object gets at most
+        reset.max_transfers_per_cube transfers (default 3); an object still
+        off target after that ends the request unsuccessfully. Experiments can
+        also cap the total and return the fresh measured result.
         Caller-supplied observations may seed only the first iteration; later
         iterations always capture fresh images with the existing station camera.
         """
@@ -338,7 +340,7 @@ class ResetManager:
             self.target_configuration = deepcopy(target_configuration)
             self._state.update(phase="observing", current_action=None, success=None,
                                scene_before=None, scene_after=None, iterations=0, manipulations=0,
-                               object_placement_errors={}, failure_reason=None,
+                               transfers_per_object={}, object_placement_errors={}, failure_reason=None,
                                timing={"started_s": time.time()})
             try:
                 if self.robot is None:
@@ -364,8 +366,12 @@ class ResetManager:
                 options = self.station_config.data.get("reset", {})
                 if rescan_objects is None:
                     rescan_objects = options.get("rescan_before_pick", True)
+                per_object_limit = options.get("max_transfers_per_cube", 3)
+                if (isinstance(per_object_limit, bool) or not isinstance(per_object_limit, int)
+                        or per_object_limit < 1):
+                    raise ValueError("reset.max_transfers_per_cube must be a positive integer")
                 self._record("reset_started", observation_tool_pose=observation_tool_pose.tolist(),
-                             max_manipulations=max_manipulations,
+                             max_manipulations=max_manipulations, max_transfers_per_cube=per_object_limit,
                              targets={key: value.tolist() for key, value in self.target_configuration.poses.items()})
                 while True:
                     if self._cancel_requested.is_set():
@@ -398,7 +404,17 @@ class ResetManager:
                         self._record("scene_observation_incomplete", iteration=self._state["iterations"],
                                      missing_objects=[key for key, error in errors.items() if not error["observed"]])
                         continue
-                    object_id = pending[0]
+                    transfers = self._state["transfers_per_object"]
+                    exhausted = [key for key in pending if transfers.get(key, 0) >= per_object_limit]
+                    actionable = [key for key in pending if key not in exhausted]
+                    if not actionable:
+                        self._record("transfer_limit_reached", object_ids=exhausted,
+                                     max_transfers_per_cube=per_object_limit)
+                        self._verify(self.target_configuration)
+                        self._state["failure_reason"] = (f"Not in place after {per_object_limit} transfers: "
+                                                         + ", ".join(exhausted))
+                        break
+                    object_id = actionable[0]
                     target = TargetConfiguration(buffer_id=self.target_configuration.buffer_id,
                                                  poses={object_id: self.target_configuration.poses[object_id]})
                     self._record("reset_action_selected", iteration=self._state["iterations"],
@@ -424,6 +440,7 @@ class ResetManager:
                         self.objects[key].mark_unobserved()
                     self._execute(actions)
                     self._state["manipulations"] += 1
+                    transfers[object_id] = transfers.get(object_id, 0) + 1
                     self._record("reset_action_finished", object_id=object_id,
                                  manipulation=self._state["manipulations"])
             except (Exception, KeyboardInterrupt) as exc:

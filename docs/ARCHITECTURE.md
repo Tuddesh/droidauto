@@ -99,7 +99,9 @@ manipulation is followed by another scene scan; commanded targets never become
 observations. The first observed off-target object in target order is selected
 again from each new scene. Missing detections cannot establish success. With no
 observed off-target object, the loop rescans until objects are visible or cancelled.
-There is no fixed retry limit. Controller/capture exceptions terminate as failures.
+Each object gets at most `reset.max_transfers_per_cube` transfers (default 3); when
+every observed off-target object has used them, the request ends unsuccessfully.
+Controller/capture exceptions terminate as failures.
 State is held in memory for the process lifetime; JSONL logs retain events.
 The JSON-lines process retains the camera and manager between reset requests.
 

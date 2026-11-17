@@ -29,8 +29,9 @@ pose and source image; subsequent resets reuse that fixed pose.
 - Reset execution repeats scene observation, target comparison and one
   pick-and-place action, returning to the observation pose after each action.
   It completes only when a fresh measured scene meets all requested targets.
-  Off-target placements are replanned without a fixed retry limit; cancellation
-  and hardware/capture failures stop the operation.
+  Off-target placements are replanned, at most `reset.max_transfers_per_cube`
+  transfers per cube (default 3); a cube still off target after that ends the
+  request unsuccessfully. Cancellation and hardware/capture failures stop the operation.
 - Events, commands, errors and final placement deviations are logged as JSONL.
 
 This is a simple endpoint transfer planner, not collision-aware path planning.
