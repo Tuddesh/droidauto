@@ -151,32 +151,46 @@ An explicit `verify` request can reassess a completed reset from supplied poses.
 
 ## Placement experiments
 
-On `sem`, run the one-cube experiment from the lab environment:
+Run the direct placement experiment from the lab environment:
 
 ```bash
 python scripts/run_placement_experiment.py --execute
 ```
 
-It moves to the saved DROID-home joints and selects the single visible configured
-cube. Each of ten trials stages it at a random reachable table pose visible from
-home, places it once into a random free, reachable buffer cell, then returns to
-the home joints and rescans the buffer and cube. Signed X/Y errors, XY distance
-and yaw error are measured from home before any corrective transfer. The home
-joints are also commanded before each placement, so the arm's stopping error
-cannot accumulate into a drifting observation pose. To use the same cells in
-every run, set `target_cells` in the settings to a list of `[column, row]` pairs;
-trial *n* uses entry *n* (cycling), and staging poses are resampled until that
-cell is reachable. Normal scene resets retain their unlimited feedback loop.
-Every executed move logs the reached flange pose and joints in `action_finished`.
+The runner scans all visible movable cubes at the saved DROID-home joints, picks
+one, places it once in a reachable grid cell, returns to the same home joints,
+and measures signed X/Y error, XY distance and yaw error. That full-scene scan
+also supplies the next pickup and obstacle map. There is no random table staging,
+close-up scan, corrective transfer, repeated buffer calibration or repeated IK
+solve for an accepted transfer. Camera and CUDA solver instances stay open.
+
+`cube_dictionary_template` names a configured cube whose physical geometry,
+marker mounting and grasp apply to every ID in its dictionary. Existing explicit
+identities are preserved; other IDs receive `cube-DICT_ARUCO_ORIGINAL-<id>` names.
+The example covers all 1024 original-dictionary IDs. The runner also enables this
+catalog for older four-cube local configs. Absent catalog entries are candidates,
+not missing physical objects; experiment scans use native-resolution detection
+without upscaling to search for all 1024 IDs.
+
+Targets leave one whole cell clear in every direction (including diagonals)
+from other cubes' measured, rotated footprints and installed grid fixtures.
+Previously placed cubes stay as obstacles; failed placements use their actual
+footprints. Each visible cube gets a turn before previously used cubes are
+selected again when feasible. When all cubes have been used, the runner can
+relocate them to other clear cells until `--runs` is reached. It stops early with
+`capacity_reached` if no safe reachable target exists, or fails before further
+motion if a previously seen cube disappears. Clearance checks cover destination
+footprints; the transit corridor must remain clear for endpoint robot motion.
 
 `--initialize-controllers` explicitly initializes controllers; `--review` enables
-frozen scan review. `--runs`, `--seed` and `--object cube-1` override selection.
-Home joints and physical table XY bounds are in
-`configs/placement_experiment.example.json`; heights come from the station config.
-Results under ignored `runs/placement_experiments/` include flushed trial CSV,
-JSONL diagnostics, setup and a summary. Ctrl+C retains completed measurements.
-Staging footprint, camera visibility and endpoint IK checks do not provide
-trajectory collision avoidance; the transit corridor must remain clear.
+frozen scan review. `--runs`, `--seed` and `--object cube-1` override selection;
+`--object` still observes all other cubes as obstacles. `--scan-buffer` refreshes
+the otherwise cached buffer calibration before starting. Fixed `target_cells`
+are attempted in order (cycling) and obey the same clearance rules.
+Home joints are in `configs/placement_experiment.example.json`. Results under
+ignored `runs/placement_experiments/` include flushed trial CSV, JSONL events,
+the station configuration and initial scene, and a summary. Ctrl+C retains
+completed measurements. Normal feedback resets keep their existing behavior.
 
 ## Docker
 

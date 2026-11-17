@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Launch a one-cube placement experiment using the existing station framework.
+"""Measure direct cube-to-grid placements using the existing station framework.
 
-The experiment stages the visible cube on the table, measures one placement
-into a random free cell (or the next cell of the settings' target_cells list)
-from DROID-home, and repeats. --execute and a start confirmation are
-required. Camera and CUDA solver instances are reused across all trials.
+Discover all movable cube IDs, transfer once, measure from home, and repeat.
+No table staging or corrective transfers. Camera and CUDA solver are reused.
+--execute and a start confirmation are required.
 """
 
 import argparse
@@ -32,8 +31,8 @@ def main():
                         default=default if default.exists() else ROOT / "configs/station.example.json")
     parser.add_argument("--settings", type=Path, default=ROOT / "configs/placement_experiment.example.json")
     parser.add_argument("--runs", type=int, help="Number of placements; default from settings: 10")
-    parser.add_argument("--seed", type=int, help="Record/reproduce random staging and cell selection")
-    parser.add_argument("--object", dest="object_id", help="Configured object ID; otherwise require exactly one visible cube")
+    parser.add_argument("--seed", type=int, help="Record/reproduce cube and cell selection")
+    parser.add_argument("--object", dest="object_id", help="Move only this cube; all visible cubes still count as obstacles")
     parser.add_argument("--scan-buffer", action="store_true", help="Recapture the buffer at home before the first trial")
     parser.add_argument("--review", action="store_true", help="Review each frozen scan interactively instead of running the batch")
     parser.add_argument("--initialize-controllers", action="store_true", help="Explicitly initialize DROID controllers before moving home")
@@ -48,14 +47,16 @@ def main():
         runs = settings["runs"] if args.runs is None else args.runs
         if runs < 1:
             parser.error("--runs must be positive")
+        # Older local station files may still enumerate only four cubes.
+        config.data.setdefault("cube_dictionary_template", "cube-1")
         config.camera["review_capture"] = args.review
-        print(f"Placement experiment: {runs} trials, one cube, random free buffer cells.")
-        print(f"Cube: {args.object_id or 'automatically choose the single visible cube'}")
-        print(f"Table X/Y bounds (base metres): {settings['table_bounds_xy_m']}")
+        print(f"Placement experiment: up to {runs} direct placements with one-cell clearance.")
+        print(f"Cubes: {args.object_id or 'all visible movable cubes, across the full dictionary'}")
         cells = settings.get("target_cells")
         print("Target cells: " + ("random free reachable cell" if cells is None
                                   else f"{cells}, in this order, repeated as needed"))
-        print("The arm will move to DROID-home, randomize the cube on the table, and perform the trials.")
+        print("The arm will scan at DROID-home, place a cube, return home to measure, and repeat.")
+        print("Stops early if no reachable target preserves the clearance or any previously seen cube disappears.")
         choice = input("Enter to start, q to cancel> ").strip().lower()
         if choice:
             print("Experiment cancelled.")
@@ -90,12 +91,14 @@ def main():
                                    orientation_tolerance_rad=options.get("orientation_tolerance_rad", 0.1),
                                    motion_timeout_s=options.get("motion_timeout_s", 60.0))
             experiment = PlacementExperiment(manager=manager, home_joints=settings["home_joints_rad"],
-                                             table_bounds_xy_m=settings["table_bounds_xy_m"],
+                                             table_bounds_xy_m=settings.get("table_bounds_xy_m", []),
                                              output_directory=directory, runs=runs,
                                              object_id=args.object_id, seed=args.seed,
                                              target_cells=settings.get("target_cells"))
             summary = experiment.run()
-            print(f"Completed {summary['completed_trials']} trials; {summary['placement_successes']} within tolerance.")
+            print(f"{summary['status']}: {summary['completed_trials']} trials; {summary['placement_successes']} within tolerance.")
+            if summary["stop_reason"]:
+                print(summary["stop_reason"])
             print(f"Mean XY error: {summary['mean_xy_error_mm']} mm\nResults: {directory}")
             return 0
     except (KeyboardInterrupt, EOFError):

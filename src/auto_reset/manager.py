@@ -107,7 +107,7 @@ class ResetManager:
     def observe(self, observations: Mapping[str, np.ndarray] | None = None, *,
                 timestamp: float | None = None, detect_buffer: bool = False,
                 detect_objects: bool = False, object_ids: tuple[str, ...] | None = None,
-                capture_count: int = 1) -> dict:
+                capture_count: int = 1, retry_missing: bool = True) -> dict:
         """Accept supplied poses or capture cube markers with the shared detector.
 
         In an explicit observation batch, omitted task objects become unobserved.
@@ -119,6 +119,7 @@ class ResetManager:
         The caller owns one open camera session for the manager's lifetime.
         Automatic scans wait for sustained low joint velocities. A close-up
         can fit multiple stereo pairs from the same stationary camera pose.
+        retry_missing=False skips enlarged-image searches for absent catalog IDs.
         """
         if detect_objects and observations is not None:
             raise ValueError("Choose camera object detection or supplied object poses")
@@ -231,7 +232,7 @@ class ResetManager:
                         frames, self.aruco_detector, config.aruco_dictionary_names,
                         selected, base_tool @ tool_left, directory,
                         review=config.camera.get("review_capture", False),
-                        planar_scene=config.data.get("planar_scene"), buffer=self.buffer,
+                        planar_scene=config.data.get("planar_scene"), buffer=self.buffer, retry_missing=retry_missing,
                     )
                     report["tool_left_camera"] = tool_left.tolist()
                     self._state["last_observation"] = report

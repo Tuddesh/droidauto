@@ -18,7 +18,7 @@ from scene.transforms import transform, transform_to_pose
 
 
 def localize_cubes(frames, detector, dictionary_names, objects, base_left_camera,
-                   directory, *, review=False, planar_scene=None, buffer=None):
+                   directory, *, review=False, planar_scene=None, buffer=None, retry_missing=True):
     """Return (base-frame cube poses, diagnostics); poses=None requests a retake.
 
 Only explicitly bound dictionary/ID pairs are matched. Missing, duplicated or
@@ -26,6 +26,8 @@ unfittable markers leave their cube unobserved. Stereo uses both eyes' corners
 in one reprojection fit; one visible eye also works. No RMS rejection threshold
 is imposed. Missing configured markers are retried at larger image scales in
 each eye using the same detector. All fitted corners use native image coordinates.
+Set retry_missing=False for catalog discovery to skip enlarged-image passes.
+Absent IDs are retained in diagnostics but omitted from console/review output.
 Stationary bursts may contain multiple pairs; repeated detections within a
 single frame remain invalid. All pairs contribute to one pose fit. Every source
 frame is saved; review shows one frozen fitted image per eye.
@@ -61,7 +63,7 @@ frame is saved; review shows one frozen fitted image per eye.
         passes = [{"scale": 1, "rejected_candidates": len(rejected)}]
         seen = {(dictionary_names[int(index)], int(marker_id))
                 for marker_id, index in zip(marker_ids, dictionary_indices)}
-        for scale in (2, 3):
+        for scale in ((2, 3) if retry_missing else ()):
             missing = bindings.keys() - seen
             if not missing:
                 break
@@ -234,16 +236,19 @@ frame is saved; review shows one frozen fitted image per eye.
             poses.pop(obj.object_id, None)
             result["error"] = str(exc)
 
+    # A dictionary catalog contains candidates, not 1024 expected physical cubes.
+    displayed = {key: result for key, result in report["objects"].items()
+                 if result.get("error") != "Configured marker not detected"}
     panels = []
     height = max(frame.image_rgb.shape[0] for frame in frames)
     width = max(frame.image_rgb.shape[1] for frame in frames)
     for frame in last_frames.values():
         annotated = overlays[frame.view]
-        panel = np.full((height + 160, width, 3), 25, dtype=np.uint8)
+        panel = np.full((height + max(160, 34 * (len(displayed) + 3)), width, 3), 25, dtype=np.uint8)
         panel[:annotated.shape[0], :annotated.shape[1]] = annotated
         lines = [f"{frame.view.upper()} | FROZEN cube observation | {len(frames)} source images",
                  "1/2 eyes | A accept | R retake | P print poses | Q / window X cancel"]
-        for object_id, result in report["objects"].items():
+        for object_id, result in displayed.items():
             if "error" in result:
                 lines.append(f"{object_id}: {result['error']}")
             else:
@@ -264,7 +269,7 @@ frame is saved; review shows one frozen fitted image per eye.
     report_path = directory / "evaluation.json"
     report_path.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
     print(f"Cube scan images and evaluation: {directory}", flush=True)
-    for object_id, result in report["objects"].items():
+    for object_id, result in displayed.items():
         if "error" in result:
             print(f"{object_id}: {result['error']}", flush=True)
         else:

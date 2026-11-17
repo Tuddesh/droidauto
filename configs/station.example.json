@@ -202,5 +202,6 @@
     "max_transfers_per_cube": 3,
     "max_reobservations": 2,
     "motion_timeout_s": 60.0
-  }
+  },
+  "cube_dictionary_template": "cube-1"
 }

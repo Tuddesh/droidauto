@@ -5,6 +5,7 @@ It constructs configured objects, buffer targets and the reset planner without
 opening cameras or robot connections. Observed poses are supplied separately.
 """
 
+from copy import deepcopy
 import hashlib
 import json
 import math
@@ -117,6 +118,26 @@ class StationConfig:
             if marker.get("id") is not None:
                 cube.bind_marker(marker["id"], marker["dictionary"])
             objects[object_id] = cube
+        template_id = self.data.get("cube_dictionary_template")
+        if template_id is not None:
+            if template_id not in objects:
+                raise ValueError("cube_dictionary_template must name a configured cube")
+            template = objects[template_id]
+            if template.marker_dictionary is None:
+                raise ValueError("Cube dictionary template must have a bound marker")
+            dictionary = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, template.marker_dictionary))
+            bound = {(obj.marker_dictionary, obj.marker_id) for obj in objects.values()}
+            for marker_id in range(len(dictionary.bytesList)):
+                if (template.marker_dictionary, marker_id) in bound:
+                    continue
+                object_id = f"cube-{template.marker_dictionary}-{marker_id}"
+                if object_id in objects:
+                    raise ValueError(f"Duplicate physical object identity: {object_id}")
+                cube = deepcopy(template)
+                cube.object_id = object_id
+                cube.marker_id = None
+                cube.bind_marker(marker_id, template.marker_dictionary)
+                objects[object_id] = cube
         return objects
 
     @staticmethod
