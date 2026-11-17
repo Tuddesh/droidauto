@@ -328,8 +328,11 @@ class ResetManager:
         The next full scene observation determines the next action, including
         retries of misplaced objects. Each object gets at most
         reset.max_transfers_per_cube transfers (default 3); an object still
-        off target after that ends the request unsuccessfully. Experiments can
-        also cap the total and return the fresh measured result.
+        off target after that ends the request unsuccessfully. A scene in which
+        a target object is not detected is observed again without moving, at
+        most reset.max_reobservations times in a row (default 2), before the
+        request ends unsuccessfully. Experiments can also cap the total and
+        return the fresh measured result.
         Caller-supplied observations may seed only the first iteration; later
         iterations always capture fresh images with the existing station camera.
         """
@@ -340,7 +343,8 @@ class ResetManager:
             self.target_configuration = deepcopy(target_configuration)
             self._state.update(phase="observing", current_action=None, success=None,
                                scene_before=None, scene_after=None, iterations=0, manipulations=0,
-                               transfers_per_object={}, object_placement_errors={}, failure_reason=None,
+                               transfers_per_object={}, reobservations=0,
+                               object_placement_errors={}, failure_reason=None,
                                timing={"started_s": time.time()})
             try:
                 if self.robot is None:
@@ -370,8 +374,13 @@ class ResetManager:
                 if (isinstance(per_object_limit, bool) or not isinstance(per_object_limit, int)
                         or per_object_limit < 1):
                     raise ValueError("reset.max_transfers_per_cube must be a positive integer")
+                reobservation_limit = options.get("max_reobservations", 2)
+                if (isinstance(reobservation_limit, bool) or not isinstance(reobservation_limit, int)
+                        or reobservation_limit < 0):
+                    raise ValueError("reset.max_reobservations must be a nonnegative integer")
                 self._record("reset_started", observation_tool_pose=observation_tool_pose.tolist(),
                              max_manipulations=max_manipulations, max_transfers_per_cube=per_object_limit,
+                             max_reobservations=reobservation_limit,
                              targets={key: value.tolist() for key, value in self.target_configuration.poses.items()})
                 while True:
                     if self._cancel_requested.is_set():
@@ -401,8 +410,17 @@ class ResetManager:
                     pending = [key for key in self.target_configuration.poses
                                if errors[key]["observed"] and not errors[key]["within_tolerance"]]
                     if not pending:
+                        missing = [key for key, error in errors.items() if not error["observed"]]
                         self._record("scene_observation_incomplete", iteration=self._state["iterations"],
-                                     missing_objects=[key for key, error in errors.items() if not error["observed"]])
+                                     missing_objects=missing)
+                        if self._state["reobservations"] >= reobservation_limit:
+                            self._record("observation_limit_reached", object_ids=missing,
+                                         max_reobservations=reobservation_limit)
+                            self._verify(self.target_configuration)
+                            self._state["failure_reason"] = (f"Not detected in {reobservation_limit + 1} "
+                                                             "observations without motion: " + ", ".join(missing))
+                            break
+                        self._state["reobservations"] += 1
                         continue
                     transfers = self._state["transfers_per_object"]
                     exhausted = [key for key in pending if transfers.get(key, 0) >= per_object_limit]
@@ -441,6 +459,7 @@ class ResetManager:
                     self._execute(actions)
                     self._state["manipulations"] += 1
                     transfers[object_id] = transfers.get(object_id, 0) + 1
+                    self._state["reobservations"] = 0
                     self._record("reset_action_finished", object_id=object_id,
                                  manipulation=self._state["manipulations"])
             except (Exception, KeyboardInterrupt) as exc:

@@ -98,7 +98,9 @@ Task-object poses are invalidated when a transfer starts. Every completed
 manipulation is followed by another scene scan; commanded targets never become
 observations. The first observed off-target object in target order is selected
 again from each new scene. Missing detections cannot establish success. With no
-observed off-target object, the loop rescans until objects are visible or cancelled.
+observed off-target object, the loop observes again without moving, at most
+`reset.max_reobservations` times in a row (default 2, reset after each transfer);
+then the request ends unsuccessfully.
 Each object gets at most `reset.max_transfers_per_cube` transfers (default 3); when
 every observed off-target object has used them, the request ends unsuccessfully.
 Controller/capture exceptions terminate as failures.
