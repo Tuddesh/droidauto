@@ -158,11 +158,14 @@ python scripts/run_placement_experiment.py --execute
 ```
 
 The runner scans all visible movable cubes at the saved DROID-home joints, picks
-one, places it once in a reachable grid cell, returns to the same home joints,
-and measures signed X/Y error, XY distance and yaw error. That full-scene scan
-also supplies the next pickup and obstacle map. There is no random table staging,
-close-up scan, corrective transfer, repeated buffer calibration or repeated IK
-solve for an accepted transfer. Camera and CUDA solver instances stay open.
+one, performs the established above-cube scan to refine its pickup pose, then
+plans and executes one transfer to a clear grid cell. It returns to the same home
+joints and measures signed X/Y error, XY distance and yaw error. Scene and
+close-up scans fit five captures each by default. Incomplete scene scans get up
+to three attempts, retaining fresh detections across those attempts. That scene
+measurement also supplies the next pickup and obstacle map. There is no random
+table staging, corrective transfer or repeated buffer calibration. Camera and
+CUDA solver instances stay open.
 
 `cube_dictionary_template` names a configured cube whose physical geometry,
 marker mounting and grasp apply to every ID in its dictionary. Existing explicit
@@ -177,13 +180,20 @@ from other cubes' measured, rotated footprints and installed grid fixtures.
 Previously placed cubes stay as obstacles; failed placements use their actual
 footprints. Each visible cube gets a turn before previously used cubes are
 selected again when feasible. When all cubes have been used, the runner can
-relocate them to other clear cells until `--runs` is reached. It stops early with
-`capacity_reached` if no safe reachable target exists, or fails before further
-motion if a previously seen cube disappears. Clearance checks cover destination
-footprints; the transit corridor must remain clear for endpoint robot motion.
+relocate them to other clear cells until `--runs` attempts have been logged.
+Failed detections, scans, planning and placement checks are recorded per trial;
+the batch continues with other visible cubes. A blocked fixed target skips that
+trial and allows the next target to be attempted. Missing cubes retain their
+last known footprints as obstacles; an unobserved transferred cube also reserves
+its destination until detected again. Motion failures require fresh stationary
+feedback and an empty gripper before returning home and continuing; unavailable
+feedback or an uncertain held cube prevents recovery. Cancellation still stops
+the batch. Clearance checks cover destination footprints; the transit corridor
+must remain clear for endpoint robot motion.
 
 `--initialize-controllers` explicitly initializes controllers; `--review` enables
 frozen scan review. `--runs`, `--seed` and `--object cube-1` override selection;
+`--captures` and `--scan-attempts` override burst size and scene retry count.
 `--object` still observes all other cubes as obstacles. `--scan-buffer` refreshes
 the otherwise cached buffer calibration before starting. Fixed `target_cells`
 are attempted in order (cycling) and obey the same clearance rules.

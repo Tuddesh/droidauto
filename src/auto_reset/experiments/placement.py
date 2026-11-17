@@ -1,12 +1,13 @@
-"""Fast first-attempt cube placement measurements using the station primitives.
+"""First-attempt cube placement measurements using the station primitives.
 
-One home scan discovers the scene. Each trial solves and executes one transfer,
-returns to the saved home joints, then scans all cubes once. That measurement
-also supplies the next pickup and obstacle map. No staging or corrective moves.
+Scene observations fit multiple captures. Each trial uses the established
+above-cube scan, replans from its refined pickup pose, transfers once, and
+measures from the saved home joints. Failed checks are retained per trial;
+other trials continue. No table staging or corrective transfers.
 Grid clearance checks do not implement trajectory collision avoidance.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import csv
 import json
 from pathlib import Path
@@ -34,6 +35,11 @@ class PlacementExperiment:
     seed: int | None = None
     target_cells: list[list[int]] | None = None
 
+    capture_count: int = 5
+    observation_attempts: int = 3
+    _obstacles: dict = field(default_factory=dict, init=False, repr=False)
+    _reservations: dict = field(default_factory=dict, init=False, repr=False)
+
     def _free_cells(self, object_id):
         """Keep a complete empty cell between target and every other footprint.
 
@@ -47,12 +53,16 @@ class PlacementExperiment:
         local_base = np.linalg.inv(grid.pose)
         obstacles = []
         for key, obj in manager.objects.items():
-            if key == object_id or obj.pose is None:
+            if key == object_id:
                 continue
-            pose = local_base @ obj.pose
-            hx, hy = np.asarray(obj.dimensions_m[:2]) / 2
-            corners = np.array([[-hx, -hy, 0], [hx, -hy, 0], [hx, hy, 0], [-hx, hy, 0]])
-            obstacles.append((corners @ pose[:3, :3].T + pose[:3, 3])[:, :2].astype(np.float32))
+            poses = [obj.pose] if obj.pose is not None else [self._obstacles.get(key), self._reservations.get(key)]
+            for base_pose in poses:
+                if base_pose is None:
+                    continue
+                pose = local_base @ base_pose
+                hx, hy = np.asarray(obj.dimensions_m[:2]) / 2
+                corners = np.array([[-hx, -hy, 0], [hx, -hy, 0], [hx, hy, 0], [-hx, hy, 0]])
+                obstacles.append((corners @ pose[:3, :3].T + pose[:3, 3])[:, :2].astype(np.float32))
         free = []
         for column in range(grid.columns):
             for row in range(grid.rows):
@@ -73,10 +83,63 @@ class PlacementExperiment:
                 free.append((column, row))
         return free
 
+    def _scan_scene(self, events, trial):
+        """Fit bursts and retry incomplete scans, merging only fresh detections."""
+        manager = self.manager
+        manager._state["phase"] = "observing"
+        expected = set(self._obstacles)
+        fresh = {}
+        for attempt in range(1, self.observation_attempts + 1):
+            if manager._cancel_requested.is_set():
+                raise ResetCancelled("Experiment cancelled during scene scan")
+            print(f"Scene scan {attempt}/{self.observation_attempts}: {self.capture_count} captures", flush=True)
+            # A failed scan cannot leave previous-trial poses eligible for pickup.
+            for obj in manager.objects.values():
+                obj.mark_unobserved()
+            try:
+                manager.observe(detect_objects=True, retry_missing=False, capture_count=self.capture_count)
+            except ResetCancelled:
+                raise
+            except Exception as exc:
+                events.emit("scene_scan_failed", trial=trial, attempt=attempt, reason=str(exc))
+                print(f"Scene scan failed: {exc}; retrying/continuing.", flush=True)
+                continue
+            for key, obj in manager.objects.items():
+                if obj.pose is not None:
+                    fresh[key] = (obj.pose.copy(), obj.observed_at)
+            if fresh and expected <= fresh.keys():
+                break
+        for obj in manager.objects.values():
+            obj.mark_unobserved()
+        for key, (pose, stamp) in fresh.items():
+            manager.objects[key].update_pose(pose, "base", stamp)
+            self._obstacles[key] = pose.copy()
+            self._reservations.pop(key, None)
+        missing = expected - fresh.keys()
+        if missing:
+            events.emit("scene_objects_missing", trial=trial, object_ids=sorted(missing))
+            print(f"{len(missing)} previously seen cubes missing; skipping those pickups.", flush=True)
+        return set(fresh)
+
+    def _recover_home(self, home, events, trial, *, transfer_failed=False):
+        """Recover after an individual action failure only with usable feedback."""
+        manager = self.manager
+        if manager._cancel_requested.is_set():
+            raise ResetCancelled("Experiment cancelled before recovery")
+        # Never resubmit a possibly pending motion RPC. Establish stationary,
+        # fresh feedback before returning home to work on another cube.
+        manager.robot.require_stationary()
+        if transfer_failed and manager.robot.read_gripper_position() > 0.1:
+            raise RuntimeError("Transfer failed with the gripper closed; cannot establish an empty gripper for the next cube")
+        self._move_home(home, events, trial=trial, before="recovery")
+        manager._state["phase"] = "observing"
+
     def run(self) -> dict:
         manager = self.manager
-        if isinstance(self.runs, bool) or not isinstance(self.runs, int) or self.runs < 1:
-            raise ValueError("Experiment runs must be a positive integer")
+        for name in ("runs", "capture_count", "observation_attempts"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
         home = np.asarray(self.home_joints, dtype=float)
         if home.shape != (7,) or not np.isfinite(home).all():
             raise ValueError("Home needs seven finite joint angles")
@@ -97,135 +160,164 @@ class PlacementExperiment:
         directory = Path(self.output_directory)
         directory.mkdir(parents=True, exist_ok=True)
         events = EventLog(directory / "trials.jsonl", echo=False)
-        rows, status, failure, stop_reason = [], "running", None, None
+        rows, status, failure = [], "running", None
         csv_file = None
-        # Share the manager's cancellation and execution lock; never clear a pending cancellation.
         if not manager._run_lock.acquire(blocking=False):
             events.close()
             raise RuntimeError("A reset is already executing")
         try:
             events.emit("experiment_started", runs=self.runs, seed=seed, home_joints=home.tolist(),
-                        target_cells=self.target_cells, clearance_cells=1, mode="direct_placement")
+                        target_cells=self.target_cells, clearance_cells=1, capture_count=self.capture_count,
+                        observation_attempts=self.observation_attempts, mode="direct_placement_with_closeup")
             self._move_home(home, events, trial=0, before="first observation")
-            manager.observe(detect_objects=True, retry_missing=False)
-            inventory = {key for key, obj in manager.objects.items() if obj.pose is not None}
-            if not inventory or self.object_id is not None and self.object_id not in inventory:
-                raise ValueError("No selected cube visible from home")
-            print(f"Detected {len(inventory)} cubes: {', '.join(sorted(inventory))}", flush=True)
+            self._obstacles.clear()
+            self._reservations.clear()
+            visible = self._scan_scene(events, trial=0)
+            print(f"Detected {len(visible)} cubes: {', '.join(sorted(visible))}", flush=True)
             if cells is not None:
+                sample = manager.objects[self.object_id] if self.object_id else next(iter(manager.objects.values()))
                 for column, row in cells:
                     TargetConfiguration(buffer_id=manager.buffer.object_id).set_cell(
-                        next(iter(inventory)), manager.buffer, column, row,
-                        scene_object=manager.objects[next(iter(inventory))], support_height_m=0.0)
+                        sample.object_id, manager.buffer, column, row, scene_object=sample, support_height_m=0.0)
             fields = ["trial", "object_id", "marker_id", "column", "row", "target_yaw_deg",
                       "observed", "success", "dx_mm", "dy_mm", "xy_error_mm", "yaw_error_deg",
-                      "reset_success", "manipulations", "duration_s"]
+                      "reset_success", "manipulations", "duration_s", "failure_stage", "failure_reason"]
             csv_file = (directory / "trials.csv").open("x", newline="", encoding="utf-8")
             writer = csv.DictWriter(csv_file, fieldnames=fields)
             writer.writeheader()
             csv_file.flush()
             setup = {"runs": self.runs, "seed": seed, "home_joints": home.tolist(),
+                     "capture_count": self.capture_count, "observation_attempts": self.observation_attempts,
                      "clearance_cells": 1, "target_cells": self.target_cells,
                      "station_config": manager.station_config.data,
                      "visible_objects": {key: {"marker_id": manager.objects[key].marker_id,
                                                 "dictionary": manager.objects[key].marker_dictionary,
                                                 "base_pose": manager.objects[key].pose.tolist()}
-                                         for key in sorted(inventory)}}
+                                         for key in sorted(visible)}}
             (directory / "setup.json").write_text(json.dumps(setup, indent=2) + "\n")
             last_used = {}
             for trial in range(1, self.runs + 1):
                 if manager._cancel_requested.is_set():
                     raise ResetCancelled("Experiment cancelled before placement")
-                # Every scene scan refreshes ALL identities, including obstacles.
-                visible = {key for key, obj in manager.objects.items() if obj.pose is not None}
-                missing = inventory - visible
-                if missing:
-                    raise RuntimeError(f"Previously visible cubes missing; stopping before further motion: {sorted(missing)}")
-                inventory |= visible
-                candidates = [key for key in sorted(visible) if self.object_id is None or key == self.object_id]
-                rng.shuffle(candidates)
-                candidates.sort(key=lambda key: last_used.get(key, 0))
-                selected = None
-                for object_id in candidates:
-                    cube = manager.objects[object_id]
-                    free = self._free_cells(object_id)
-                    if cells is not None:
-                        free = [cells[(trial-1) % len(cells)]] if cells[(trial-1) % len(cells)] in free else []
-                    else:
-                        rng.shuffle(free)
-                    for column, row in free:
-                        target = TargetConfiguration(buffer_id=manager.buffer.object_id)
-                        target.set_cell(object_id, manager.buffer, column, row,
-                                        scene_object=cube, support_height_m=0.0)
-                        desired = target.pose_for(object_id)
-                        # Require a real transfer, even when revisiting an already placed cube.
-                        actual = np.linalg.inv(manager.buffer.pose) @ cube.pose
-                        if np.linalg.norm(actual[:2, 3] - desired[:2, 3]) < manager.buffer.cell_size_mm / 2000:
-                            continue
-                        try:
-                            actions = manager.plan(target, solve_ik=True, rescan_objects=False)
-                        except RuntimeError as exc:
-                            if "no feasible IK solution" not in str(exc):
-                                raise
-                            events.emit("cell_unreachable", trial=trial, object_id=object_id, column=column, row=row)
-                            continue
-                        selected = (object_id, cube, column, row, target, actions)
-                        break
-                    if selected is not None:
-                        break
-                if selected is None:
-                    stop_reason = "No reachable target with one-cell clearance" if cells is None else "Requested target blocked or unreachable"
-                    events.emit("experiment_capacity_reached", trial=trial, reason=stop_reason)
-                    print(stop_reason + "; retaining completed measurements.", flush=True)
-                    break
-                object_id, cube, column, row, target, actions = selected
-                print(f"Trial {trial}/{self.runs}: {object_id} -> ({column}, {row}); place once, measure.", flush=True)
                 started = time.monotonic()
-                # Execute the already solved transfer using the manager's existing
-                # command/logging primitive. Avoid the feedback loop's replanning,
-                # close-up scan, retries and duplicate verification captures.
-                manager.target_configuration = target
-                manager._state.update(phase="executing", success=None, manipulations=0,
-                                      scene_before=manager.observe(), timing={"started_s": time.time()})
-                events.emit("transfer_started", trial=trial, object_id=object_id, actions=actions)
-                manager._execute(actions)
-                manager._state["manipulations"] = 1
-                self._move_home(home, events, trial=trial, before="measurement")
-                manager._state["phase"] = "observing"
-                manager.observe(detect_objects=True, retry_missing=False)
-                manager._verify(target)
-                duration = time.monotonic() - started
-                observed = cube.pose is not None
-                dx = dy = distance = angle = None
-                success = False
-                if observed:
+                result = dict.fromkeys(fields)
+                result.update(trial=trial, target_yaw_deg=0.0, observed=False, success=False,
+                              reset_success=False, manipulations=0)
+                target, object_id, stage = None, None, "selection"
+                fatal = None
+                try:
+                    if not visible:
+                        visible = self._scan_scene(events, trial)
+                    candidates = [key for key in sorted(visible) if self.object_id is None or key == self.object_id]
+                    rng.shuffle(candidates)
+                    candidates.sort(key=lambda key: last_used.get(key, 0))
+                    selected = None
+                    for key in candidates:
+                        cube = manager.objects[key]
+                        free = self._free_cells(key)
+                        if cells is not None:
+                            free = [cells[(trial-1) % len(cells)]] if cells[(trial-1) % len(cells)] in free else []
+                        else:
+                            rng.shuffle(free)
+                        for column, row in free:
+                            candidate = TargetConfiguration(buffer_id=manager.buffer.object_id)
+                            candidate.set_cell(key, manager.buffer, column, row, scene_object=cube, support_height_m=0.0)
+                            desired = candidate.pose_for(key)
+                            actual = np.linalg.inv(manager.buffer.pose) @ cube.pose
+                            if np.linalg.norm(actual[:2, 3] - desired[:2, 3]) < manager.buffer.cell_size_mm / 2000:
+                                continue
+                            try:
+                                # Existing above-cube scan, using the home observation's camera mount.
+                                scan = manager.plan(candidate, solve_ik=True, rescan_objects=True)
+                            except ResetCancelled:
+                                raise
+                            except Exception as exc:
+                                events.emit("candidate_failed", trial=trial, object_id=key,
+                                            column=column, row=row, reason=str(exc))
+                                # Scan reachability does not depend on the destination.
+                                break
+                            selected = (key, cube, column, row, candidate, scan)
+                            break
+                        if selected is not None:
+                            break
+                    if selected is None:
+                        raise ValueError("No visible cube with a clear target and reachable scan; skipping trial")
+                    object_id, cube, column, row, target, scan = selected
+                    last_used[object_id] = trial
+                    result.update(object_id=object_id, marker_id=cube.marker_id, column=column, row=row)
+                    manager.target_configuration = target
+                    manager._state.update(success=None, manipulations=0, scene_before=manager.observe(),
+                                          timing={"started_s": time.time()})
+                    stage = "pickup_scan"
+                    print(f"Trial {trial}/{self.runs}: scan above {object_id}, then place in ({column}, {row}).", flush=True)
+                    for action in scan:
+                        if action["type"] == "rescan_object":
+                            action["capture_count"] = self.capture_count
+                    manager._state["phase"] = "executing"
+                    events.emit("pickup_scan_started", trial=trial, object_id=object_id, actions=scan)
+                    manager._execute(scan)
+                    if cube.pose is not None:
+                        self._obstacles[object_id] = cube.pose.copy()
+                    # Solve the transfer AFTER the close-up has refined the pickup.
+                    stage = "transfer_planning"
+                    manager._state["phase"] = "planning"
+                    actions = manager.plan(target, solve_ik=True, rescan_objects=False)
+                    stage = "transfer"
+                    self._reservations[object_id] = manager.buffer.pose @ target.pose_for(object_id)
+                    manager._state["phase"] = "executing"
+                    events.emit("transfer_started", trial=trial, object_id=object_id, actions=actions)
+                    manager._execute(actions)
+                    result["manipulations"] = 1
+                    stage = "return_home"
+                    self._move_home(home, events, trial=trial, before="measurement")
+                    stage = "measurement"
+                    visible = self._scan_scene(events, trial)
+                    manager._verify(target)
+                    result["reset_success"] = bool(manager.state["success"])
+                    if cube.pose is None:
+                        raise ValueError("Placed cube not detected after scan retries")
+                    result["observed"] = True
                     actual = np.linalg.inv(manager.buffer.pose) @ cube.pose
+                    desired = target.pose_for(object_id)
                     delta = actual[:2, 3] - desired[:2, 3]
-                    dx, dy = (delta * 1000).tolist()
-                    distance = float(np.linalg.norm(delta) * 1000)
+                    result["dx_mm"], result["dy_mm"] = (delta * 1000).tolist()
+                    result["xy_error_mm"] = float(np.linalg.norm(delta) * 1000)
                     phi = transform_to_pose(actual)[5] - transform_to_pose(desired)[5]
-                    angle = float(np.degrees(np.arctan2(np.sin(phi), np.cos(phi))))
+                    result["yaw_error_deg"] = float(np.degrees(np.arctan2(np.sin(phi), np.cos(phi))))
                     position_m, orientation_rad = pose_error(cube.pose, manager.buffer.pose @ desired)
-                    success = (position_m <= manager.position_tolerance_m
-                               and orientation_rad <= manager.orientation_tolerance_rad)
-                result = {"trial": trial, "object_id": object_id, "marker_id": cube.marker_id,
-                          "column": column, "row": row, "target_yaw_deg": 0.0,
-                          "observed": observed, "success": bool(success),
-                          "dx_mm": dx, "dy_mm": dy, "xy_error_mm": distance, "yaw_error_deg": angle,
-                          "reset_success": bool(manager.state["success"]),
-                          "manipulations": 1, "duration_s": duration}
-                writer.writerow(result)
-                csv_file.flush()
-                rows.append(result)
-                last_used[object_id] = trial
-                events.emit("trial_measured", **result, base_buffer=manager.buffer.pose.tolist(),
-                            target_buffer_pose=desired.tolist(), scene=manager.observe())
-                measured = "cube not detected" if distance is None else f"XY error {distance:.2f} mm, yaw error {angle:.2f} deg"
-                print(f"Trial {trial}/{self.runs}: {measured}; success={success}", flush=True)
-                missing = inventory - {key for key, obj in manager.objects.items() if obj.pose is not None}
-                if missing:
-                    raise RuntimeError(f"Cubes missing after placement; recorded trial and stopped: {sorted(missing)}")
-            status = "completed" if len(rows) == self.runs else "capacity_reached"
+                    result["success"] = bool(position_m <= manager.position_tolerance_m
+                                             and orientation_rad <= manager.orientation_tolerance_rad)
+                    if not result["success"]:
+                        result.update(failure_stage="measurement", failure_reason="Placement outside tolerance")
+                except ResetCancelled:
+                    raise
+                except Exception as exc:
+                    result.update(failure_stage=stage, failure_reason=str(exc))
+                    events.emit("trial_failed", trial=trial, object_id=object_id, stage=stage,
+                                reason=str(exc), traceback=traceback.format_exc())
+                    print(f"Trial {trial}/{self.runs}: {stage} failed: {exc}; continuing with other cubes.", flush=True)
+                    try:
+                        if stage in ("pickup_scan", "transfer_planning", "transfer", "return_home"):
+                            self._recover_home(home, events, trial, transfer_failed=stage == "transfer")
+                        if stage != "measurement":
+                            visible = self._scan_scene(events, trial)
+                    except ResetCancelled:
+                        raise
+                    except Exception as recovery_error:
+                        fatal = RuntimeError(f"Robot recovery failed after trial {trial}: {recovery_error}")
+                finally:
+                    result["duration_s"] = time.monotonic() - started
+                    writer.writerow(result)
+                    csv_file.flush()
+                    rows.append(result)
+                    events.emit("trial_measured", **result, base_buffer=manager.buffer.pose.tolist(),
+                                target_buffer_pose=None if target is None else target.pose_for(object_id).tolist(),
+                                scene=manager.observe())
+                if fatal is not None:
+                    raise fatal
+                measured = "no placement measurement" if result["xy_error_mm"] is None else f"XY error {result['xy_error_mm']:.2f} mm"
+                print(f"Trial {trial}/{self.runs}: {measured}; success={result['success']}", flush=True)
+            status = "completed"
         except (Exception, KeyboardInterrupt) as exc:
             status = "cancelled" if isinstance(exc, (ResetCancelled, KeyboardInterrupt)) else "failed"
             failure = str(exc) or type(exc).__name__
@@ -235,10 +327,11 @@ class PlacementExperiment:
         finally:
             errors = [r["xy_error_mm"] for r in rows if r["xy_error_mm"] is not None]
             summary = {"status": status, "requested_trials": self.runs, "completed_trials": len(rows),
-                       "placement_successes": sum(r["success"] for r in rows), "seed": seed,
+                       "placement_successes": sum(r["success"] for r in rows),
+                       "failed_trials": sum(not r["success"] for r in rows), "seed": seed,
                        "mean_xy_error_mm": None if not errors else float(np.mean(errors)),
                        "max_xy_error_mm": None if not errors else float(np.max(errors)),
-                       "failure_reason": failure, "stop_reason": stop_reason}
+                       "failure_reason": failure, "stop_reason": None}
             try:
                 (directory / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
             finally:

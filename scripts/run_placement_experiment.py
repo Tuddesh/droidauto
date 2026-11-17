@@ -2,6 +2,7 @@
 """Measure direct cube-to-grid placements using the existing station framework.
 
 Discover all movable cube IDs, transfer once, measure from home, and repeat.
+Each pickup uses an above-cube scan; scene scans use multiple captures.
 No table staging or corrective transfers. Camera and CUDA solver are reused.
 --execute and a start confirmation are required.
 """
@@ -31,6 +32,8 @@ def main():
                         default=default if default.exists() else ROOT / "configs/station.example.json")
     parser.add_argument("--settings", type=Path, default=ROOT / "configs/placement_experiment.example.json")
     parser.add_argument("--runs", type=int, help="Number of placements; default from settings: 10")
+    parser.add_argument("--captures", type=int, help="Captures per scene/close-up scan (default: 5)")
+    parser.add_argument("--scan-attempts", type=int, help="Attempts for incomplete scene scans (default: 3)")
     parser.add_argument("--seed", type=int, help="Record/reproduce cube and cell selection")
     parser.add_argument("--object", dest="object_id", help="Move only this cube; all visible cubes still count as obstacles")
     parser.add_argument("--scan-buffer", action="store_true", help="Recapture the buffer at home before the first trial")
@@ -56,7 +59,7 @@ def main():
         print("Target cells: " + ("random free reachable cell" if cells is None
                                   else f"{cells}, in this order, repeated as needed"))
         print("The arm will scan at DROID-home, place a cube, return home to measure, and repeat.")
-        print("Stops early if no reachable target preserves the clearance or any previously seen cube disappears.")
+        print("Failed scans, blocked targets and placement checks are logged; other trials continue.")
         choice = input("Enter to start, q to cancel> ").strip().lower()
         if choice:
             print("Experiment cancelled.")
@@ -94,7 +97,9 @@ def main():
                                              table_bounds_xy_m=settings.get("table_bounds_xy_m", []),
                                              output_directory=directory, runs=runs,
                                              object_id=args.object_id, seed=args.seed,
-                                             target_cells=settings.get("target_cells"))
+                                             target_cells=settings.get("target_cells"),
+                                             capture_count=args.captures if args.captures is not None else settings.get("capture_count", 5),
+                                             observation_attempts=args.scan_attempts if args.scan_attempts is not None else settings.get("observation_attempts", 3))
             summary = experiment.run()
             print(f"{summary['status']}: {summary['completed_trials']} trials; {summary['placement_successes']} within tolerance.")
             if summary["stop_reason"]:

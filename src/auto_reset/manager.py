@@ -506,7 +506,7 @@ class ResetManager:
                 try:
                     options = {} if self.station_config is None else self.station_config.data.get("reset", {})
                     self.observe(detect_objects=True, object_ids=(object_id,),
-                                 capture_count=options.get("scan_capture_count", 5))
+                                 capture_count=action.get("capture_count", options.get("scan_capture_count", 5)))
                 finally:
                     self._state["phase"] = "executing"
                 if obj.pose is None:
