@@ -6,6 +6,7 @@ camera markers or the caller. The detected buffer pose is cached.
 --dummy supplies example coordinates; --detect-objects uses the actual cube.
 --execute enables reset motion.
 --collect-one detects a table cube and chooses a free buffer cell automatically.
+Execution homes before capturing the scene.
 """
 
 import argparse
@@ -43,6 +44,16 @@ def handle_request(manager, config, request, *, execute=False):
             raise ValueError("Collecting a cube requires configured table and buffer support heights")
         if not manager.objects:
             raise ValueError("Configure a cube template before collecting markers")
+        options = config.data.get("reset", {})
+        if execute:
+            home = np.asarray(options.get("home_joints_rad"), dtype=float)
+            if home.shape != (7,) or not np.isfinite(home).all():
+                raise ValueError("Set reset.home_joints_rad to seven finite home joint angles")
+            print("Moving to DROID home before observing the scene...", file=sys.stderr, flush=True)
+            manager._record("collect_home_started", joints=home.tolist())
+            manager.robot.command_joints(home.tolist(), blocking=True)
+            manager.robot.wait_until_stopped(timeout_s=manager.motion_timeout_s)
+            manager._record("collect_home_finished")
         # The existing catalog factory supplies the same geometry for unbound IDs.
         original = set(manager.objects)
         if config.data.get("cube_dictionary_template") is None:
@@ -51,7 +62,7 @@ def handle_request(manager, config, request, *, execute=False):
             if key not in manager.objects:
                 manager.register_object(obj)
         manager.observe(detect_objects=True, detect_buffer=request.get("detect_buffer", False),
-                        capture_count=config.data.get("reset", {}).get("scan_capture_count", 5),
+                        capture_count=options.get("scan_capture_count", 5),
                         retry_missing=False)
         for key in tuple(manager.objects):
             if key not in original and manager.objects[key].pose is None:
@@ -166,7 +177,7 @@ def main():
     inputs.add_argument("--detect-objects", action="store_true",
                         help="Detect the actual cube and use the example buffer target; --execute enables movement")
     inputs.add_argument("--collect-one", action="store_true",
-                        help="Detect a table cube and select a free buffer cell; --execute performs the reset")
+                        help="Detect a table cube and select a free buffer cell; --execute homes first and performs the reset")
     parser.add_argument("--execute", action="store_true", help="Connect DROID and allow reset requests")
     parser.add_argument("--scan-buffer", action="store_true", help="Capture the stationary buffer again instead of loading its saved pose")
     parser.add_argument("--review-buffer", action="store_true", help="Show frozen buffer/object scans and wait for accept/retake/cancel")
@@ -224,8 +235,11 @@ def main():
             with redirect_stdout(sys.stderr):
                 robot.initialize()
         if args.scan_buffer:
-            with redirect_stdout(sys.stderr):
-                manager.observe(detect_buffer=True)
+            if request is not None and request.get("operation") == "collect":
+                request["detect_buffer"] = True
+            else:
+                with redirect_stdout(sys.stderr):
+                    manager.observe(detect_buffer=True)
         records = [json.dumps(request)] if request is not None else sys.stdin
         for record in records:
             if not record.strip():

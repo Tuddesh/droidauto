@@ -123,9 +123,10 @@ buffer-relative. The buffer is detected once or loaded from calibration.
 it plans unless `--execute` is also present. `--review-buffer` enables frozen
 review for both buffer and cube scans; `--no-review` disables interactive review.
 `--collect-one` selects a visible cube outside the buffer and an unoccupied,
-reachable buffer cell automatically. It observes from the current arm pose and
-uses the existing reset loop with `--execute`; without it, it previews the next
-stage. The corresponding JSON request is `{"operation":"collect"}`.
+reachable buffer cell automatically. With `--execute`, it first moves to the
+configured `reset.home_joints_rad`, then observes and uses the existing reset
+loop. Without execution, it observes from the current pose and previews the next
+stage without homing. The corresponding JSON request is `{"operation":"collect"}`.
 
 Example request shapes (poses here are illustrative):
 
