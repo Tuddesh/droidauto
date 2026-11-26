@@ -38,7 +38,9 @@ class StationConfig:
         self.camera = self.data.get("camera", {})
         planar = self.data.get("planar_scene")
         if planar is not None:
-            for key in ("table_z_m", "buffer_surface_height_m"):
+            for key in ("table_z_m", "buffer_surface_height_m", "buffer_marker_height_m", "buffer_bottom_height_m"):
+                if key not in planar and key in ("buffer_marker_height_m", "buffer_bottom_height_m"):
+                    continue
                 if isinstance(planar[key], bool) or not math.isfinite(planar[key]):
                     raise ValueError(f"planar_scene.{key} must be finite metres")
         self.layout.setdefault("marker_orientation", "independent")
@@ -171,12 +173,13 @@ class StationConfig:
                                 support_height_m=placement["support_height_m"])
         planar = self.data.get("planar_scene")
         if planar is not None:
+            marker_height = float(planar.get("buffer_marker_height_m", planar["buffer_surface_height_m"]))
             cell = buffer.cell_size_mm / 1000
             low = -np.asarray(buffer.origin) * cell
             high = (np.array([buffer.columns, buffer.rows]) - buffer.origin) * cell
             for object_id, pose in list(target.poses.items()):
                 on_buffer = np.all(pose[:2, 3] >= low) and np.all(pose[:2, 3] <= high)
-                support = 0.0 if on_buffer else -float(planar["buffer_surface_height_m"])
+                support = (float(planar["buffer_surface_height_m"]) if on_buffer else 0.0) - marker_height
                 yaw = float(np.arctan2(pose[1, 0], pose[0, 0]))
                 target.set_pose(object_id, pose_to_transform([
                     pose[0, 3], pose[1, 3], support + objects[object_id].dimensions_m[2] / 2,

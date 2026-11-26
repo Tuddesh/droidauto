@@ -18,7 +18,9 @@
   },
   "planar_scene": {
     "table_z_m": -0.040,
-    "buffer_surface_height_m": 0.005
+    "buffer_bottom_height_m": 0.040,
+    "buffer_marker_height_m": 0.060,
+    "buffer_surface_height_m": 0.048
   },
   "camera": {
     "serial": "14301071",

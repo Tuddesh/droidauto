@@ -14,10 +14,13 @@ pose and source image; subsequent resets reuse that fixed pose.
 - Cube: **40 x 40 x 20 mm**, centered **40 mm** top marker,
   **DICT_ARUCO_ORIGINAL / ID 5**, aligned with the cube edges. Origin is the geometric center.
 - Camera and supplied object observations use the **robot base frame**; the buffer is detected.
-- `planar_scene` fixes the table at base Z = -40 mm and the buffer marker/support
-  surface 5 mm above it. Localization fits X/Y/yaw only, using both stereo eyes.
-  Cube centers are at -30 mm on the table and -25 mm inside the buffer footprint;
-  roll/pitch are zero. Targets use the same geometry, without an extra 5 mm offset.
+- `planar_scene` fixes the table at base Z = -40 mm. Buffer heights above the
+  table are separate: bottom 40 mm, cube-support surface 48 mm, marker plane
+  60 mm. Their settings are `buffer_bottom_height_m`, `buffer_surface_height_m`
+  and `buffer_marker_height_m` in the station config. Localization fits X/Y/yaw
+  using both eyes. Cube centers are at base Z = -30 mm on the table and +18 mm
+  on the buffer; roll/pitch are zero. The buffer coordinate origin lies on its
+  marker plane at base Z = +20 mm, so its support surface is at local Z = -12 mm.
 - Targets are object poses in **buffer coordinates**, or free buffer cells with
   an explicit support-plane height.
 - Configured grasps are **T_object_tool**, using DROID's actual reported tool

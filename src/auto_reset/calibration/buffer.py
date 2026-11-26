@@ -210,7 +210,8 @@ def capture_calibration(config, robot, camera, report=None, review=False) -> Buf
                     right = next((f for f in frames if f.view == "right"), None) if stereo else None
                     candidate = grids[reference.view].localize_planar(
                         reference.image_rgb, base_tool @ tool_left_camera @ left_reference,
-                        float(planar["table_z_m"]) + float(planar["buffer_surface_height_m"]),
+                        float(planar["table_z_m"]) + float(planar.get(
+                            "buffer_marker_height_m", planar["buffer_surface_height_m"])),
                         right_buffer=None if right is None else grids[right.view],
                         right_image_rgb=None if right is None else right.image_rgb,
                         left_camera_right=None if right is None else right.left_camera_eye,

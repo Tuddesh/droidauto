@@ -60,7 +60,8 @@ match the frame DROID reports. Cell targets put the geometric center half the
 object height above the explicitly supplied buffer support plane.
 
 With `planar_scene`, Buffer.localize_planar() projects detected marker corners
-through calibrated camera rays onto base Z = -35 mm and fits buffer X/Y/yaw.
+through calibrated camera rays onto the configured marker plane (base Z = +20 mm)
+and fits buffer X/Y/yaw. The cube-support surface is separate (base Z = +8 mm).
 Independently rotated buffer markers are matched by their centers. Cube
 localization similarly projects corners onto the known top-marker plane and
 fits X/Y/yaw, selecting the buffer support surface inside its footprint and the

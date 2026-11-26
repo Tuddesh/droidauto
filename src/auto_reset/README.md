@@ -35,6 +35,9 @@ placement tool pose = T_base_buffer @ T_buffer_object @ T_object_tool
 `TargetConfiguration.set_cell(..., scene_object=cube, support_height_m=z)`
 uses the actual cube height to place its center above the supplied cell floor.
 The floor height is relative to the marker plane; it is not assumed to be zero.
+With the current geometry this is -0.012 m: the support is 48 mm above the table
+and the marker plane is 60 mm above it. `StationConfig.make_target()` applies
+these planes to planar scene targets automatically.
 Fixture-occupied cells and oversized rotated footprints are rejected.
 
 A transfer is: initial lift at current XY → open → above pickup → pickup →
