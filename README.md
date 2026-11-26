@@ -127,6 +127,20 @@ the new observation. `reset.scan_distance_m` sets the distance;
 If the close-up cannot localize the cube, the transfer uses its coarse pose and
 logs a warning.
 
+To collect one visible table cube into a free buffer cell, start the arm at the
+home/observation pose and run:
+
+```bash
+python -m auto_reset --collect-one --execute --initialize-controllers --review-buffer
+```
+
+This reuses the saved buffer calibration, discovers marker IDs using the
+configured cube template, and prefers available cells near the buffer center.
+Installed fixtures and cells overlapped by other visible cubes are excluded.
+The existing reset loop performs the transfer, returns to the starting camera
+pose and measures the result. The command exits after that reset. Omit
+`--execute` to capture the scene and preview the next planning stage.
+
 To teach a target, arrange the scene and run `python scripts/teach_scene.py`.
 Enter a name, capture and review the frozen stereo images, then save. All selected
 objects must be detected; `--objects cube-1` selects a subset and `--scan-buffer`

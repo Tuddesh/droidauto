@@ -122,6 +122,10 @@ buffer-relative. The buffer is detected once or loaded from calibration.
 `--detect-objects` instead uses camera cube poses and the example buffer target;
 it plans unless `--execute` is also present. `--review-buffer` enables frozen
 review for both buffer and cube scans; `--no-review` disables interactive review.
+`--collect-one` selects a visible cube outside the buffer and an unoccupied,
+reachable buffer cell automatically. It observes from the current arm pose and
+uses the existing reset loop with `--execute`; without it, it previews the next
+stage. The corresponding JSON request is `{"operation":"collect"}`.
 
 Example request shapes (poses here are illustrative):
 
