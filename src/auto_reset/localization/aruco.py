@@ -84,6 +84,7 @@ frame is saved; review shows one frozen fitted image per eye.
         ids = np.asarray(marker_ids, dtype=np.int32).reshape(-1, 1) if marker_ids else None
         annotated = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         eye = {"timestamp_s": frame.timestamp_s, "markers": [],
+               "image_settings": frame.image_settings,
                "image_size_px": [rgb.shape[1], rgb.shape[0]],
                "serial": frame.serial, "matrix": frame.camera_matrix.tolist(),
                "distortion": frame.distortion.tolist(),
@@ -247,7 +248,7 @@ frame is saved; review shows one frozen fitted image per eye.
         panel = np.full((height + max(160, 34 * (len(displayed) + 3)), width, 3), 25, dtype=np.uint8)
         panel[:annotated.shape[0], :annotated.shape[1]] = annotated
         lines = [f"{frame.view.upper()} | FROZEN cube observation | {len(frames)} source images",
-                 "1/2 eyes | A accept | R retake | P print poses | Q / window X cancel"]
+                 "1/2 eyes | E exposure bracket | A accept | R retake | P poses | Q cancel"]
         for object_id, result in displayed.items():
             if "error" in result:
                 lines.append(f"{object_id}: {result['error']}")
@@ -266,6 +267,10 @@ frame is saved; review shows one frozen fitted image per eye.
             paths[suffix] = str(path)
         report["eyes"][frame.view]["images"] = paths
         panels.append(panel)
+    comparison = ((frames[0].image_settings or {}).get("search") or {}).get("contact_sheet")
+    exposure_panel = cv2.imread(comparison) if comparison else None
+    if exposure_panel is not None:
+        panels.append(exposure_panel)
     report_path = directory / "evaluation.json"
     report_path.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
     print(f"Cube scan images and evaluation: {directory}", flush=True)
@@ -296,9 +301,13 @@ frame is saved; review shows one frozen fitted image per eye.
                     if key == 27 or not visible:
                         choice = "q"
                 else:
-                    choice = input("Frozen cube scan [a=accept, r=retake, p=print poses, q=cancel]> ").strip().lower()
+                    choice = input("Frozen cube scan [a=accept, r=retake, e=exposure bracket, p=poses, q=cancel]> ").strip().lower()
                 if choice in ("1", "2"):
-                    selected = min(int(choice) - 1, len(panels) - 1)
+                    selected = min(int(choice) - 1, len(last_frames) - 1)
+                elif choice == "e" and exposure_panel is not None:
+                    selected = len(panels) - 1
+                    if not gui:
+                        print(f"Exposure comparison: {comparison}", flush=True)
                 elif choice == "p":
                     print(json.dumps(report["objects"], indent=2), flush=True)
                 elif choice == "r":

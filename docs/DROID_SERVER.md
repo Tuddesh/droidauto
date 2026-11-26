@@ -132,11 +132,14 @@ supplied poses and a saved buffer calibration do not need a camera session. Ster
 share one SDK grab and timestamp. The SDK rectified stereo transform supplies
 the right optical frame relative to the left in IMAGE coordinates/metres.
 
-Exposure/gain are automatic. Startup and metering-region changes consume
-frames to let exposure settle. `camera.auto_exposure_roi` selects an optional
-normalized metering rectangle; buffer capture can infer a region from detected
-markers. A final image or synchronized pair supplies the pose observation.
-Frame metadata includes exposure, gain, metering region and settling details.
+Exposure starts with SDK auto metering, then searches approximately -3 to +3 EV
+in shutter steps at fixed gain. Candidates are ranked across both eyes by
+recognized markers and marker contrast, sharpness and white clipping. Unrelated
+bright lights do not set the exposure. `camera.auto_exposure_roi` selects an
+optional working rectangle; buffer capture can infer it from marker locations.
+The winning settings stay fixed through the capture burst. Candidate images,
+scores and a frozen comparison sheet are saved under `exposure_searches/` in the
+configured log directory. Press E in frozen scan review to inspect the bracket.
 
 ## Upstream references
 

@@ -122,6 +122,8 @@ def meter_buffer_exposure(config, camera):
     These initial frames guide auto exposure only. Localization and its saved
     report use a fresh final pair after exposure has settled in the new region.
     """
+    camera.aruco_detector = config.aruco_detector
+    camera.exposure_directory = config.resolve(config.data["log_directory"]) / "exposure_searches"
     if config.camera.get("auto_exposure_roi") is not None:
         return
     frames = camera.capture_pair() if config.camera["view"] == "stereo" else [camera.capture()]
@@ -373,6 +375,7 @@ def capture_calibration(config, robot, camera, report=None, review=False) -> Buf
                 "identity_mount_assumption": bool(np.allclose(tool_left_camera, np.eye(4), atol=1e-12, rtol=0)),
                 "tool_left_camera": tool_left_camera.tolist(),
                 "camera": {"serial": frame.serial, "view": config.camera["view"], "reference_view": frame.view,
+                           "image_settings": frame.image_settings,
                            "stereo_extrinsics_source": "zed_sdk_rectified",
                            "image_size_px": [frame.image_rgb.shape[1], frame.image_rgb.shape[0]],
                            "matrix": frame.camera_matrix.tolist(), "distortion": frame.distortion.tolist()},
@@ -401,7 +404,7 @@ def capture_calibration(config, robot, camera, report=None, review=False) -> Buf
             rms_text = f"{rms:.3f}" if rms is not None else "no pose"
             text = [f"{captured.view.upper()} | RMS: {rms_text} px | warning level: {config.camera['max_reprojection_rms_px']:g} px",
                     "GREEN = detected corners | MAGENTA crosses = projected model | RED = residual",
-                    "FROZEN FRAME | 1/2 eyes | A accept | R retake | P print pose | Q / window X cancel",
+                    "FROZEN | 1/2 eyes | E exposure bracket | A accept | R retake | P pose | Q cancel",
                     str(failure) if failure else " | ".join(warnings) or "Fit available for inspection"]
             panel = np.full((height+160, width, 3), 25, np.uint8)
             panel[:annotated.shape[0], :annotated.shape[1]] = cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR)
@@ -409,6 +412,10 @@ def capture_calibration(config, robot, camera, report=None, review=False) -> Buf
                 cv2.putText(panel,line[:220],(12,height+30+36*index),cv2.FONT_HERSHEY_SIMPLEX,.7,(240,240,240),1,cv2.LINE_AA)
             panels.append(panel)
             cv2.imwrite(str(directory / f"{captured.view}_review.png"),panel)
+        comparison = ((frames[0].image_settings or {}).get("search") or {}).get("contact_sheet")
+        exposure_panel = cv2.imread(comparison) if comparison else None
+        if exposure_panel is not None:
+            panels.append(exposure_panel)
         diagnostic = {"error": None if failure is None else str(failure), "warnings": warnings, "eyes": eyes,
                       "calibration": None if result is None else result.record}
         (directory / "evaluation.json").write_text(json.dumps(diagnostic,indent=2,default=lambda value:value.tolist() if hasattr(value,"tolist") else str(value))+"\n")
@@ -438,9 +445,12 @@ def capture_calibration(config, robot, camera, report=None, review=False) -> Buf
                             visible = False
                         if key == 27 or not visible:choice="q"
                     else:
-                        choice=input("Frozen scan [a=accept, r=retake, p=print pose, q=cancel]> ").strip().lower()
+                        choice=input("Frozen scan [a=accept, r=retake, e=exposure bracket, p=pose, q=cancel]> ").strip().lower()
                     if choice in ("1","2"):
-                        selected=min(int(choice)-1,len(panels)-1)
+                        selected=min(int(choice)-1,len(frames)-1)
+                    elif choice == "e" and exposure_panel is not None:
+                        selected=len(panels)-1
+                        if not gui:print(f"Exposure comparison: {comparison}",flush=True)
                     elif choice == "p" and result is not None:
                         pose=transform_to_pose(result.base_buffer)
                         print("Buffer base XYZ (m):",pose[:3],"RPY (deg):",np.degrees(pose[3:]).tolist(),flush=True)

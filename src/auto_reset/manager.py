@@ -70,6 +70,11 @@ class ResetManager:
     def __post_init__(self):
         # Available to observe() for object detection as well as buffer scans.
         self.aruco_detector = self.buffer.aruco_detector
+        if self.camera is not None:
+            self.camera.aruco_detector = self.aruco_detector
+            if self.station_config is not None:
+                self.camera.exposure_directory = self.station_config.resolve(
+                    self.station_config.data["log_directory"]) / "exposure_searches"
         for value in (self.position_tolerance_m, self.orientation_tolerance_rad, self.motion_timeout_s):
             if not math.isfinite(value) or value <= 0:
                 raise ValueError("Verification tolerances and motion timeout must be positive")
