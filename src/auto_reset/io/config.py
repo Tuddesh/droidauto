@@ -15,9 +15,9 @@ import tempfile
 import cv2
 import numpy as np
 
-from buffer import Buffer
+from buffer import Buffer, BufferItem
 from buffer.items import ArucoTile
-from scene import Cube
+from scene import Cube, SceneObject
 from scene.transforms import pose_to_transform, transform
 
 
@@ -37,7 +37,9 @@ class StationConfig:
         self.camera = self.data.get("camera", {})
         planar = self.data.get("planar_scene")
         if planar is not None:
-            for key in ("table_z_m", "buffer_surface_height_m"):
+            for key in ("table_z_m", "buffer_surface_height_m", "buffer_marker_height_m"):
+                if key == "buffer_marker_height_m" and key not in planar:
+                    continue
                 if isinstance(planar[key], bool) or not math.isfinite(planar[key]):
                     raise ValueError(f"planar_scene.{key} must be finite metres")
         self.layout.setdefault("marker_orientation", "independent")
@@ -92,31 +94,44 @@ class StationConfig:
         path = Path(path).expanduser()
         return path if path.is_absolute() else self.path.parent / path
 
-    def make_objects(self) -> dict[str, Cube]:
-        """Load cube geometry, marker metadata and measured grasp parameters."""
+    def make_objects(self) -> dict[str, SceneObject]:
+        """Load generic marker objects or cubes with the existing top-grasp shortcut."""
         objects = {}
         for item in self.data.get("objects", []):
-            if item.get("type") != "cube":
-                raise ValueError("Only cube manipulation objects are supported")
+            if item.get("type") not in ("cube", "object"):
+                raise ValueError("Object type must be cube or object")
             object_id = item["object_id"]
             if object_id in objects or object_id == self.layout.get("object_id"):
                 raise ValueError(f"Duplicate physical object identity: {object_id}")
             marker = item.get("marker", {})
-            cube = Cube(object_id=object_id,
-                        dimensions_m=tuple(item.get("dimensions_m", (0.04, 0.04, 0.02))),
-                        marker_size_m=marker.get("size_m", 0.040),
-                        marker_center_xy_m=tuple(marker.get("center_xy_m", (0, 0))),
-                        marker_yaw_rad=marker.get("yaw_rad"),
-                        grasps=[self.read_pose(value) for value in item.get("grasps", [])],
-                        manipulation=dict(item.get("manipulation", {})))
-            dimensions = np.asarray(cube.dimensions_m, dtype=float)
-            if dimensions.shape != (3,) or not np.isfinite(dimensions).all() or np.any(dimensions <= 0):
-                raise ValueError("Cube needs three positive dimensions")
+            object_class = Cube if item["type"] == "cube" else SceneObject
+            options = {}
+            if "dimensions_m" in item:
+                options["dimensions_m"] = tuple(item["dimensions_m"])
+            obj = object_class(
+                object_id=object_id, **options,
+                marker_size_m=marker.get("size_m", 0.040),
+                marker_center_xy_m=tuple(marker.get("center_xy_m", (0, 0))),
+                marker_yaw_rad=marker.get("yaw_rad"),
+                marker_pose=None if "pose" not in marker else self.read_pose(marker["pose"]),
+                support_z_m=item.get("support_z_m"),
+                grasps=[self.read_pose(value) for value in item.get("grasps", [])],
+                manipulation=dict(item.get("manipulation", {})),
+            )
+            if obj.dimensions_m is not None:
+                dimensions = np.asarray(obj.dimensions_m, dtype=float)
+                if dimensions.shape != (3,) or not np.isfinite(dimensions).all() or np.any(dimensions <= 0):
+                    raise ValueError("Object dimensions must be three positive finite lengths")
+            if obj.support_z_m is None:
+                obj.support_z_m = 0.0 if obj.dimensions_m is None else -obj.dimensions_m[2] / 2
+            if isinstance(obj.support_z_m, bool) or not math.isfinite(obj.support_z_m):
+                raise ValueError("support_z_m must be a finite object-relative height")
+            positive(obj.marker_size_m, "marker.size_m")
             if (marker.get("id") is None) != (marker.get("dictionary") is None):
                 raise ValueError("Marker binding needs both ID and dictionary")
             if marker.get("id") is not None:
-                cube.bind_marker(marker["id"], marker["dictionary"])
-            objects[object_id] = cube
+                obj.bind_marker(marker["id"], marker["dictionary"])
+            objects[object_id] = obj
         return objects
 
     @staticmethod
@@ -136,6 +151,7 @@ class StationConfig:
         """Resolve request targets given as buffer poses or cell placements."""
         from auto_reset import TargetConfiguration
         target = TargetConfiguration(buffer_id=buffer.object_id)
+        planar = self.data.get("planar_scene")
         for object_id, placement in placements.items():
             if object_id not in objects:
                 raise KeyError(f"Unknown target object: {object_id}")
@@ -145,41 +161,53 @@ class StationConfig:
                 target.set_pose(object_id, self.read_pose(placement["pose"]))
             else:
                 column, row = placement["cell"]
+                support = placement.get("support_height_m")
+                if support is None:
+                    if planar is None:
+                        raise ValueError("Cell targets need support_height_m when no planar_scene is configured")
+                    support = float(planar["buffer_surface_height_m"]) - float(planar.get(
+                        "buffer_marker_height_m", planar["buffer_surface_height_m"]))
                 target.set_cell(object_id, buffer, column, row,
                                 yaw=placement.get("yaw_rad", 0.0), scene_object=objects[object_id],
-                                support_height_m=placement["support_height_m"])
-        planar = self.data.get("planar_scene")
+                                support_height_m=support,
+                                footprint=None if "size_cells" not in placement else
+                                BufferItem(*placement["size_cells"], object_id=object_id))
         if planar is not None:
             cell = buffer.cell_size_mm / 1000
             low = -np.asarray(buffer.origin) * cell
             high = (np.array([buffer.columns, buffer.rows]) - buffer.origin) * cell
             for object_id, pose in list(target.poses.items()):
                 on_buffer = np.all(pose[:2, 3] >= low) and np.all(pose[:2, 3] <= high)
-                support = 0.0 if on_buffer else -float(planar["buffer_surface_height_m"])
+                support = (float(planar["buffer_surface_height_m"]) if on_buffer else 0.0)
+                support -= float(planar.get("buffer_marker_height_m", planar["buffer_surface_height_m"]))
+                obj = objects[object_id]
+                support_z = obj.support_z_m
+                if support_z is None:
+                    support_z = 0.0 if obj.dimensions_m is None else -obj.dimensions_m[2] / 2
                 yaw = float(np.arctan2(pose[1, 0], pose[0, 0]))
-                target.set_pose(object_id, pose_to_transform([
-                    pose[0, 3], pose[1, 3], support + objects[object_id].dimensions_m[2] / 2,
+                target.poses[object_id] = pose_to_transform([
+                    pose[0, 3], pose[1, 3], support - support_z,
                     0, 0, yaw,
-                ]))
+                ])
         return target
 
     def save_marker_binding(self, object_id: str, marker_id: int, dictionary: str) -> None:
-        """Persist one confirmed cube marker identity in this station config.
+        """Persist one confirmed object marker identity in this station config.
 
-        Discovery and selecting the cube belong to the localization integration.
+        Discovery and selecting the object belong to the localization integration.
         Existing bindings must match; only the selected object's marker fields
         are written. The image-processing service is never called here.
         """
         data = json.loads(self.path.read_text())
         matches = [item for item in data.get("objects", []) if item.get("object_id") == object_id]
-        if len(matches) != 1 or matches[0].get("type") != "cube":
-            raise ValueError("Expected exactly one configured cube with the requested object_id")
+        if len(matches) != 1:
+            raise ValueError("Expected exactly one configured object with the requested object_id")
         item = matches[0]
         marker = item.get("marker", {})
-        cube = Cube(object_id=object_id, marker_id=marker.get("id"),
+        obj = SceneObject(object_id=object_id, marker_id=marker.get("id"),
                     marker_dictionary=marker.get("dictionary"))
-        cube.bind_marker(marker_id, dictionary)
-        marker.update(family=cube.marker_family, id=cube.marker_id, dictionary=cube.marker_dictionary)
+        obj.bind_marker(marker_id, dictionary)
+        marker.update(family=obj.marker_family, id=obj.marker_id, dictionary=obj.marker_dictionary)
         item["marker"] = marker
         temporary = None
         try:

@@ -3,7 +3,7 @@
 Use --request for one JSON document, or send one request per stdin line to keep
 manager state across observe/reset/verify operations. Object poses can come from
 camera markers or the caller. The detected buffer pose is cached.
---dummy supplies example coordinates; --detect-objects uses the actual cube.
+--dummy supplies example coordinates; --detect-objects uses configured objects.
 --execute enables reset motion.
 """
 
@@ -72,7 +72,7 @@ def main():
     inputs.add_argument("--dummy", action="store_true",
                         help="Supply example object coordinates; buffer is detected or loaded from calibration")
     inputs.add_argument("--detect-objects", action="store_true",
-                        help="Detect the actual cube and use the example buffer target; --execute enables movement")
+                        help="Detect configured objects and use the example buffer target; --execute enables movement")
     parser.add_argument("--execute", action="store_true", help="Connect DROID and allow reset requests")
     parser.add_argument("--scan-buffer", action="store_true", help="Capture the stationary buffer again instead of loading its saved pose")
     parser.add_argument("--review-buffer", action="store_true", help="Show frozen buffer/object scans and wait for accept/retake/cancel")

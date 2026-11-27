@@ -15,7 +15,7 @@ import math
 
 import numpy as np
 
-from scene import Cube, SceneObject
+from scene import SceneObject
 from scene.transforms import transform
 from .target_configuration import TargetConfiguration
 
@@ -69,8 +69,6 @@ class ResetPlanner:
             raise ValueError(f"{scene_object.object_id} needs a supplied pose in the base frame")
         current = transform(current_tool_pose)
         if tool_left_camera is not None:
-            if not isinstance(scene_object, Cube):
-                raise ValueError("Close-up scanning requires a marker-topped cube")
             if not math.isfinite(scan_distance_m) or scan_distance_m <= 0:
                 raise ValueError("Scan distance must be positive")
             mount = transform(tool_left_camera)

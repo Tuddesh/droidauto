@@ -1,8 +1,8 @@
-"""Fit configured cube markers in rectified camera images and retain diagnostics.
+"""Fit configured object markers in rectified images and retain diagnostics.
 
 The caller owns capture, robot feedback and the shared OpenCV detector. This
 adapter fits one marker pose jointly across the available eyes, then uses the
-cube's existing marker-mount conversion to produce its robot-base center pose.
+object's marker-mount conversion to produce its robot-base pose.
 The planar mode fixes support heights and fits only base X/Y/yaw using camera rays.
 """
 
@@ -13,16 +13,15 @@ import cv2
 import numpy as np
 from scipy.optimize import least_squares
 
-from scene import Cube
 from scene.transforms import transform, transform_to_pose
 
 
-def localize_cubes(frames, detector, dictionary_names, objects, base_left_camera,
-                   directory, *, review=False, planar_scene=None, buffer=None):
-    """Return (base-frame cube poses, diagnostics); poses=None requests a retake.
+def localize_objects(frames, detector, dictionary_names, objects, base_left_camera,
+                     directory, *, review=False, planar_scene=None, buffer=None):
+    """Return (base-frame object poses, diagnostics); poses=None requests a retake.
 
 Only explicitly bound dictionary/ID pairs are matched. Missing, duplicated or
-unfittable markers leave their cube unobserved. Stereo uses both eyes' corners
+unfittable markers leave their object unobserved. Stereo uses both eyes' corners
 in one reprojection fit; one visible eye also works. No RMS rejection threshold
 is imposed. Missing configured markers are retried at larger image scales in
 each eye using the same detector. All fitted corners use native image coordinates.
@@ -34,14 +33,12 @@ Inputs and annotated frozen frames are saved for every attempt.
               "eyes": {}, "objects": {}}
     bindings, samples, poses, overlays = {}, {}, {}, {}
     for obj in objects.values():
-        if not isinstance(obj, Cube):
-            continue
         key = (obj.marker_dictionary, obj.marker_id)
         if None in key:
-            report["objects"][obj.object_id] = {"error": "Cube marker dictionary and ID are not bound"}
+            report["objects"][obj.object_id] = {"error": "Object marker dictionary and ID are not bound"}
             continue
         if key in bindings:
-            raise ValueError(f"Two cubes are bound to the same marker: {key}")
+            raise ValueError(f"Two objects are bound to the same marker: {key}")
         bindings[key] = obj
         samples[obj.object_id] = []
         report["objects"][obj.object_id] = {"dictionary": key[0], "id": key[1],
@@ -130,7 +127,14 @@ Inputs and annotated frozen frames are saved for every attempt.
         try:
             if planar_scene is not None:
                 if buffer is None or buffer.pose is None or buffer.pose_frame != "base":
-                    raise ValueError("Planar cube localization requires the buffer pose in base coordinates")
+                    raise ValueError("Planar object localization requires the buffer pose in base coordinates")
+                mount = obj.marker_mount_transform()
+                if not np.allclose(mount[:3, 2], [0, 0, 1]):
+                    raise ValueError("Planar localization requires an upward-facing horizontal marker mount")
+                support_z = obj.support_z_m
+                if support_z is None:
+                    support_z = 0.0 if obj.dimensions_m is None else -obj.dimensions_m[2] / 2
+                marker_height = obj.marker_plane_z_m - support_z
                 table_z = float(planar_scene["table_z_m"])
                 buffer_z = table_z + float(planar_scene["buffer_surface_height_m"])
                 origins, directions = [], []
@@ -143,8 +147,8 @@ Inputs and annotated frozen frames are saved for every attempt.
                     directions.extend(rays)
                 origins, directions = np.asarray(origins), np.asarray(directions)
                 if np.any(np.abs(directions[:, 2]) < 1e-12):
-                    raise ValueError("A cube corner ray is parallel to the support plane")
-                marker_z = buffer_z + obj.dimensions_m[2]
+                    raise ValueError("A marker corner ray is parallel to the support plane")
+                marker_z = buffer_z + marker_height
                 distances = (marker_z - origins[:, 2]) / directions[:, 2]
                 projected = origins + directions * distances[:, None]
                 candidate = np.r_[projected.mean(axis=0), 1.0]
@@ -154,10 +158,10 @@ Inputs and annotated frozen frames are saved for every attempt.
                 high = (np.array([buffer.columns, buffer.rows]) - buffer.origin) * cell_size
                 support = "buffer" if np.all(in_buffer[:2] >= low) and np.all(in_buffer[:2] <= high) else "table"
                 support_z = buffer_z if support == "buffer" else table_z
-                marker_z = support_z + obj.dimensions_m[2]
+                marker_z = support_z + marker_height
                 distances = (marker_z - origins[:, 2]) / directions[:, 2]
                 if np.any(distances <= 0):
-                    raise ValueError("The cube marker plane lies behind a camera ray")
+                    raise ValueError("The object marker plane lies behind a camera ray")
                 measured_base = (origins + directions * distances[:, None])[:, :2]
                 template = np.tile(points[:, :2], (len(observations), 1))
                 center = measured_base.mean(axis=0)
@@ -199,14 +203,14 @@ Inputs and annotated frozen frames are saved for every attempt.
                 if np.any(depths <= 0):
                     raise ValueError("Marker pose places corners behind the camera")
             base_marker = base_left_camera @ left_marker
-            base_cube = obj.pose_from_marker(base_marker)
-            poses[obj.object_id] = base_cube
+            base_object = obj.pose_from_marker(base_marker)
+            poses[obj.object_id] = base_object
             values = np.r_[cv2.Rodrigues(left_marker[:3, :3])[0].ravel(), left_marker[:3, 3]]
             errors = residual(values).reshape(-1, 4, 2)
             result.pop("error", None)
-            result.update(base_marker=base_marker.tolist(), base_cube=base_cube.tolist(),
-                          base_xyz_m=base_cube[:3, 3].tolist(),
-                          base_rpy_deg=np.degrees(transform_to_pose(base_cube)[3:]).tolist(),
+            result.update(base_marker=base_marker.tolist(), base_object=base_object.tolist(),
+                          base_xyz_m=base_object[:3, 3].tolist(),
+                          base_rpy_deg=np.degrees(transform_to_pose(base_object)[3:]).tolist(),
                           views=[frame.view for frame, _, _ in observations],
                           reprojection_rms_px=float(np.sqrt(np.mean(np.sum(errors ** 2, axis=2)))),
                           per_eye_rms_px={frame.view: float(np.sqrt(np.mean(np.sum(error ** 2, axis=1))))
@@ -227,7 +231,7 @@ Inputs and annotated frozen frames are saved for every attempt.
         annotated = overlays[frame.view]
         panel = np.full((height + 160, width, 3), 25, dtype=np.uint8)
         panel[:annotated.shape[0], :annotated.shape[1]] = annotated
-        lines = [f"{frame.view.upper()} | FROZEN cube observation",
+        lines = [f"{frame.view.upper()} | FROZEN object observation",
                  "1/2 eyes | A accept | R retake | P print poses | Q / window X cancel"]
         for object_id, result in report["objects"].items():
             if "error" in result:
@@ -249,7 +253,7 @@ Inputs and annotated frozen frames are saved for every attempt.
         panels.append(panel)
     report_path = directory / "evaluation.json"
     report_path.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
-    print(f"Cube scan images and evaluation: {directory}", flush=True)
+    print(f"Object scan images and evaluation: {directory}", flush=True)
     for object_id, result in report["objects"].items():
         if "error" in result:
             print(f"{object_id}: {result['error']}", flush=True)
@@ -258,7 +262,7 @@ Inputs and annotated frozen frames are saved for every attempt.
             print(f"{object_id}: base XYZ (m) {pose[:3]}, RPY (deg) "
                   f"{np.degrees(pose[3:]).tolist()}, RMS {result['reprojection_rms_px']:.3f} px", flush=True)
     if review:
-        title = "DroidAuto - frozen cube scan"
+        title = "DroidAuto - frozen object scan"
         gui = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")) and bool(cv2.currentUIFramework())
         if gui:
             cv2.namedWindow(title, cv2.WINDOW_NORMAL)
@@ -277,7 +281,7 @@ Inputs and annotated frozen frames are saved for every attempt.
                     if key == 27 or not visible:
                         choice = "q"
                 else:
-                    choice = input("Frozen cube scan [a=accept, r=retake, p=print poses, q=cancel]> ").strip().lower()
+                    choice = input("Frozen object scan [a=accept, r=retake, p=print poses, q=cancel]> ").strip().lower()
                 if choice in ("1", "2"):
                     selected = min(int(choice) - 1, len(panels) - 1)
                 elif choice == "p":
@@ -285,7 +289,7 @@ Inputs and annotated frozen frames are saved for every attempt.
                 elif choice == "r":
                     return None, report
                 elif choice in ("q", "quit"):
-                    raise RuntimeError("Cube scan cancelled by operator")
+                    raise RuntimeError("Object scan cancelled by operator")
                 elif choice == "a":
                     report["accepted_by_operator"] = True
                     report_path.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")

@@ -107,13 +107,13 @@ class ResetManager:
     def observe(self, observations: Mapping[str, np.ndarray] | None = None, *,
                 timestamp: float | None = None, detect_buffer: bool = False,
                 detect_objects: bool = False, object_ids: tuple[str, ...] | None = None) -> dict:
-        """Accept supplied poses or capture cube markers with the shared detector.
+        """Accept supplied poses or capture object markers with the shared detector.
 
         In an explicit observation batch, omitted task objects become unobserved.
         The buffer is detected through the existing calibration capture utility;
         its actual pose fitting stays in Buffer.localize()/localize_stereo().
         Calling without arguments returns the current snapshot without capture.
-        detect_objects=True captures current cube poses; missing cubes become
+        detect_objects=True captures current object poses; missing objects become
         unobserved. Scan diagnostics are retained in state['last_observation'].
         The caller owns one open camera session for the manager's lifetime.
         """
@@ -170,7 +170,7 @@ class ResetManager:
             print(f"Buffer detected; calibration and source image saved to {path}", flush=True)
         if detect_objects:
             from .calibration.buffer import load_hand_eye
-            from .localization import localize_cubes
+            from .localization import localize_objects
 
             config = self.station_config
             self._record("object_detection_started")
@@ -200,7 +200,7 @@ class ResetManager:
                             tool_left = tool_right @ np.linalg.inv(transform(right.left_camera_eye))
                     directory = (config.resolve(config.data["log_directory"]) / "object_scans" /
                                  datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ"))
-                    observations, report = localize_cubes(
+                    observations, report = localize_objects(
                         frames, self.aruco_detector, config.aruco_dictionary_names,
                         selected, base_tool @ tool_left, directory,
                         review=config.camera.get("review_capture", False),
@@ -324,10 +324,10 @@ class ResetManager:
                 if unknown:
                     raise KeyError(f"Unknown target object(s): {sorted(unknown)}")
                 if self.station_config.data.get("planar_scene") is not None:
-                    self.target_configuration = self.station_config.make_target(
+                    self.target_configuration.poses = self.station_config.make_target(
                         {key: {"pose": pose} for key, pose in self.target_configuration.poses.items()},
                         self.buffer, self.objects,
-                    )
+                    ).poses
                 observation_tool_pose = self.robot.read_state().tool_pose.copy()
                 options = self.station_config.data.get("reset", {})
                 if rescan_objects is None:

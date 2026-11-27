@@ -156,7 +156,7 @@ def main():
         return 130
     except Exception as exc:
         cancelled = isinstance(exc, RuntimeError) and str(exc) in (
-            "Cube scan cancelled by operator", "Buffer scan cancelled by operator")
+            "Object scan cancelled by operator", "Buffer scan cancelled by operator")
         if log is not None:
             # ExitStack has closed the log if acquisition failed; retain the traceback.
             with log.path.open("a", encoding="utf-8") as output:

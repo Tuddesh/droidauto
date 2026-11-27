@@ -1,73 +1,59 @@
 # Physical scene models
 
-```text
-PhysicalObject
-├── Buffer
-├── BufferItem
-│   └── ArucoTile
-└── SceneObject
-    └── Cube
-```
+`PhysicalObject` owns identity, optional dimensions and the observed pose/frame/
+timestamp. `Buffer`, `BufferItem` and `SceneObject` inherit that data.
 
-`PhysicalObject` owns `object_id`, `dimensions_m`, `pose`, `pose_frame` and
-`observed_at`. `update_pose(pose, reference_frame, timestamp)` copies a rigid
-transform and records provenance. `mark_unobserved()` clears the observation.
-A pose is T_reference_object in metres. Configured IDs persist across sessions;
-a generated UUID only identifies that individual instance. Buffer dimensions
-span the marker reference plane and do not model the fixture's solid volume.
+`SceneObject` describes a manipulation object without assuming a shape. It owns
+marker geometry and explicit `grasps` (T_object_tool). `Cube` adds the existing
+geometric-center/top-marker and generated top-grasp shortcuts. There is no
+separate bowl class.
 
-`SceneObject` adds object-relative `grasps` and `manipulation` parameters.
-`grasp_poses()` returns configured T_object_tool matrices, where tool is the
-frame reported by DROID, not an assumed fingertip frame.
+## Frames and geometry
 
-## Cube
+All transforms are T_parent_child in metres. Configured poses accept a 4×4
+matrix or `[x,y,z,roll,pitch,yaw]` with fixed-axis XYZ radians.
 
-The block is **40 x 40 x 20 mm**, with a centered **40 mm** marker on top.
-Its origin is the geometric center, X/Y follow its base edges, and +Z points
-out of the top face. The marker plane is at Z=+10 mm. The station example
-records **DICT_ARUCO_ORIGINAL, ID 27**, with marker/cube edges aligned. Image
-detection belongs to the reset framework's localization adapter.
+- `marker.pose` is T_object_marker. It can describe an offset or rotated mount.
+- `support_z_m` is the support surface's Z in object coordinates. If omitted,
+  it is minus half the object height when dimensions are known, otherwise zero.
+- `grasps` are T_object_tool, using DROID's reported flange (`panda_link8`).
+  They already include the flange-to-gripping-point offset.
+- Cube configurations can keep `marker.center_xy_m` and `marker.yaw_rad`
+  instead of `marker.pose`, and generate a top grasp from
+  `manipulation.tool_to_grasp_m` (currently 167 mm).
 
-```python
-from scene import Cube
-
-cube = Cube(object_id="cube-1")
-cube.bind_marker(13, "DICT_ARUCO_ORIGINAL")
-```
-
-Marker identity can be persisted through `StationConfig.save_marker_binding`.
-Matching repeated bindings are allowed; changing an existing identity is
-rejected. DICT_5X5_50/100/250/1000 and DICT_ARUCO_ORIGINAL are supported 5x5
-families. Center conversion uses:
+The existing `bind_marker`, `marker_mount_transform`, `marker_plane_z_m`,
+`center_from_marker` and `pose_from_marker` now belong to `SceneObject` and
+remain inherited by `Cube`. Marker binding supports DICT_4X4_*, DICT_5X5_*
+and DICT_ARUCO_ORIGINAL. A marker's mounting yaw must be known to recover
+object-edge orientation; centering alone does not establish it.
 
 ```text
-cube center = marker position - 0.010 * marker outward Z axis
+T_reference_object = T_reference_marker @ inverse(T_object_marker)
+pickup tool pose = T_base_object @ T_object_tool
 ```
 
-`center_from_marker(T_reference_marker)` performs this geometry without needing
-marker yaw. For edge-aligned full orientation, supply `marker_yaw_rad` relative
-to the block's edges. Then `marker_mount_transform()` returns T_cube_marker and
-`pose_from_marker()` computes T_reference_marker @ inverse(T_cube_marker).
-These are pure transforms; they do not localize images or update observations.
+The shared localizer uses these mounts for both 3D and planar fitting. Planar
+objects must rest upright with a horizontal, upward-facing marker; its height
+is `marker_plane_z_m - support_z_m` above the support surface.
 
-## Grasp configuration
+## Configured scene
 
-An explicit `grasps` list of T_cube_tool matrices (or six-value poses in station
-JSON) overrides generated top grasps. Otherwise configure:
+[The station example](../../configs/station.example.json) defines:
 
-```json
-{"manipulation":{"tool_to_grasp_m":0.167,"grasp_center_z_m":0.0,"grasp_yaw_rad":0.0}}
-```
+| Object | Geometry and marker | Grasp |
+| --- | --- | --- |
+| `cube-7` (`cube`) | 33 mm cube; centered 25 mm DICT_4X4_50 / 7 top marker | Downward grasp at geometric center; marker/edge alignment assumed 0°. |
+| `bowl-36` (`object`) | Origin at the outside support center; centered 35 mm DICT_4X4_50 / 36 marker, 4 mm above it | Rim point 70 mm above marker and 40 mm radially beyond its +X/+Y corner. |
 
-The grasp center is **167 mm** along tool +Z from the flange. With
-`grasp_center_z_m=0`, it targets the cube center. The closed fingertips extend
-to **178 mm** and are used separately for height clipping. Grasp yaw is
-configured relative to the cube; the current example uses 0 degrees.
-`Cube.top_grasp(tool_to_grasp_m, grasp_center_z_m=0, yaw_rad=0)`
-returns a tool-Z-down T_cube_tool with the gripping point at the selected cube
-height. The planner uses `grasp_poses()[0]` for both pickup and placement.
-The current helper assumes a downward top grasp on an upright cube.
+The bowl grasp radius is 64.749 mm; its height is 74 mm above the support.
+The explicit flange pose includes the 167 mm tool offset. Tool X is set radial
+(yaw 45° relative to the marker); its agreement with the physical gripper's
+closing axis remains to be checked. Bowl exterior dimensions have not been
+invented from the grasp radius.
 
-Grasp tool yaw is relative to cube edges, independently of marker mounting yaw.
-Scene observations passed directly to the reset stack must already describe
-the physical cube frame, rather than an unconverted camera/marker frame.
+[The target example](../../configs/reset.example.json) puts `cube-7` in cell
+(1,3), and centers `bowl-36` on the 2×2 region beginning at (4,1). Explicit
+`size_cells` reservations allow physical overhang; they do not model collisions.
+Cell targets derive support height from `planar_scene`, or accept an explicit
+`support_height_m` in the buffer-marker frame when no planar model is used.

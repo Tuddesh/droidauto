@@ -5,21 +5,23 @@ configuration, plan object transfers, execute them through DROID, and verify
 placements from fresh observations after each manipulation. VLA execution and
 model evaluation orchestration are outside this project's implementation scope.
 
-Cube poses come from camera ArUco detection or supplied robot-base coordinates.
+Object poses come from camera ArUco detection or supplied robot-base coordinates.
 The existing buffer detector captures the stationary buffer once and saves its
 pose and source image; subsequent resets reuse that fixed pose.
 
 ## Current behavior
 
-- Cube: **40 x 40 x 20 mm**, centered **40 mm** top marker,
-  **DICT_ARUCO_ORIGINAL / ID 5**, aligned with the cube edges. Origin is the geometric center.
-- Camera and supplied object observations use the **robot base frame**; the buffer is detected.
-- `planar_scene` fixes the table at base Z = -40 mm and the buffer marker/support
-  surface 5 mm above it. Localization fits X/Y/yaw only, using both stereo eyes.
-  Cube centers are at -30 mm on the table and -25 mm inside the buffer footprint;
-  roll/pitch are zero. Targets use the same geometry, without an extra 5 mm offset.
-- Targets are object poses in **buffer coordinates**, or free buffer cells with
-  an explicit support-plane height.
+- Objects share marker mounts and explicit grasps through `SceneObject`;
+  `Cube` retains its top-grasp shortcut. The example defines a **33 mm cube**
+  (DICT_4X4_50 / **7**, 25 mm marker) and a **bowl** (DICT_4X4_50 / **36**,
+  35 mm marker, 4 mm above its underside).
+- Camera and supplied observations use the **robot base frame**.
+- `planar_scene` fixes the table at base Z = **−40 mm**, buffer support at
+  table +**48 mm**, and buffer marker plane at table +**60 mm**. Localization
+  fits X/Y/yaw using both stereo eyes and each object's marker/support geometry.
+- Targets are poses in **buffer coordinates** or cell reservations. The example
+  places the cube in **(1,3)** and the bowl in a **2×2** region starting at
+  **(4,1)**, allowing rim overhang. Heights follow the station geometry.
 - Configured grasps are **T_object_tool**, using DROID's actual reported tool
   frame. A top-grasp helper accepts a measured tool-to-gripping-point offset.
 - Planning creates lift/transit/pick/place/gripper endpoints. There is no dense
@@ -49,7 +51,7 @@ droidauto/
 │   │   ├── hardware/         DROID and independent ZED adapters
 │   │   ├── calibration/      Existing buffer and hand-eye utilities
 │   │   └── io/               Configuration and event logging
-│   ├── scene/                Shared physical objects and cube grasp geometry
+│   ├── scene/                Shared physical objects, marker mounts and grasps
 │   └── buffer/               Grid geometry, fixtures and buffer localization
 ├── scripts/                  Interactive manual hardware tools
 ├── configs/                  Examples; local JSON ignored
@@ -109,20 +111,20 @@ python -m auto_reset --config configs/station.local.json --request configs/reset
 plans using the detected/cached buffer. Add `--scan-buffer` for a fresh capture
 and `--execute` to perform the transfer.
 
-`python -m auto_reset --detect-objects --review-buffer` instead detects the real
-cube, shows frozen scan images and plans its transfer. Add `--execute` to move.
-Camera-based execution first approaches a scan pose 250 mm from the top marker,
+`python -m auto_reset --detect-objects --review-buffer` instead detects the configured
+objects, shows frozen scan images and plans their transfers. Add `--execute` to move.
+Camera-based execution first approaches a scan pose 250 mm from the object marker,
 centered between the stereo cameras and looking down using the measured camera
 mount. It captures/reviews a close-up, then replans the transfer from that pose
 estimate. A plan preview ends at the rescan action; pickup coordinates follow
 the new observation. `reset.scan_distance_m` sets the distance;
 `reset.rescan_before_pick=false` disables this stage. Supplied/dummy poses skip it.
-If the close-up cannot localize the cube, the transfer uses its coarse pose and
+If the close-up cannot localize the object, the transfer uses its coarse pose and
 logs a warning.
 
 To teach a target, arrange the scene and run `python scripts/teach_scene.py`.
 Enter a name, capture and review the frozen stereo images, then save. All selected
-objects must be detected; `--objects cube-1` selects a subset and `--scan-buffer`
+objects must be detected; `--objects cube-7` selects a subset and `--scan-buffer`
 refreshes a moved buffer. Targets are buffer-relative and stored under ignored
 `runs/scenes/<name>/reset.json`, with capture diagnostics. The script prints the
 reset command and sends no movement or controller-initialization commands.
@@ -166,7 +168,7 @@ local configs, datasets, environments and recordings are excluded.
 ## Supporting material
 
 - [Current architecture](docs/ARCHITECTURE.md)
-- [Scene and cube methods](src/scene/README.md)
+- [Scene objects, markers and grasps](src/scene/README.md)
 - [Buffer geometry/localization](src/buffer/README.md)
 - [DROID integration](docs/DROID_SERVER.md)
 - [Dataset provenance](docs/YCBV_DATASET.md)

@@ -1,5 +1,5 @@
 {
-  "description": "Reset station with a 167 mm flange-to-grasp-center offset and 178 mm closed-fingertip reach. Scene poses, support height and transit settings are illustrative.",
+  "description": "Reset station for a 33 mm cube and a rim-grasped bowl. Grasps use the 167 mm flange-to-grasp offset. Bowl tool X is radial; confirm that it matches the gripper closing axis before execution.",
   "robot_endpoint": "tcp://192.168.88.12:4242",
   "calibration_file": "../runs/calibration/buffer.json",
   "log_directory": "../runs/reset",
@@ -12,13 +12,30 @@
     "position_tolerance_m": 0.001,
     "orientation_tolerance_rad": 0.01,
     "joint_limits_source": "DROID config/panda/franka_hardware.yaml; joint_pos margin matches its safety controller",
-    "joint_lower_rad": [-2.80, -1.66, -2.80, -2.97, -2.80, 0.08, -2.80],
-    "joint_upper_rad": [2.80, 1.66, 2.80, -0.17, 2.80, 3.65, 2.80],
+    "joint_lower_rad": [
+      -2.8,
+      -1.66,
+      -2.8,
+      -2.97,
+      -2.8,
+      0.08,
+      -2.8
+    ],
+    "joint_upper_rad": [
+      2.8,
+      1.66,
+      2.8,
+      -0.17,
+      2.8,
+      3.65,
+      2.8
+    ],
     "joint_margin_rad": 0.2
   },
   "planar_scene": {
-    "table_z_m": -0.040,
-    "buffer_surface_height_m": 0.005
+    "table_z_m": -0.04,
+    "buffer_surface_height_m": 0.048,
+    "buffer_marker_height_m": 0.06
   },
   "camera": {
     "serial": "14301071",
@@ -82,111 +99,48 @@
   "objects": [
     {
       "type": "cube",
-      "object_id": "cube-1",
+      "object_id": "cube-7",
       "dimensions_m": [
-        0.04,
-        0.04,
-        0.02
+        0.033,
+        0.033,
+        0.033
       ],
       "marker": {
-        "face": "top",
-        "id": 5,
-        "size_m": 0.037,
-        "center_xy_m": [
-          0.0,
-          0.0
-        ],
-        "yaw_rad": 0.0,
-        "family": "5x5",
-        "dictionary": "DICT_ARUCO_ORIGINAL"
+        "id": 7,
+        "dictionary": "DICT_4X4_50",
+        "size_m": 0.025,
+        "yaw_rad": 0.0
       },
-      "grasps": [],
       "manipulation": {
-        "tool_to_grasp_m": 0.167,
-        "grasp_center_z_m": 0.0,
-        "grasp_yaw_rad": 0.0
+        "tool_to_grasp_m": 0.167
       }
     },
     {
-      "type": "cube",
-      "object_id": "cube-2",
-      "dimensions_m": [
-        0.04,
-        0.04,
-        0.02
-      ],
+      "type": "object",
+      "object_id": "bowl-36",
       "marker": {
-        "face": "top",
-        "id": 3,
-        "size_m": 0.037,
-        "center_xy_m": [
-          0.0,
-          0.0
-        ],
-        "yaw_rad": 0.0,
-        "family": "5x5",
-        "dictionary": "DICT_ARUCO_ORIGINAL"
+        "id": 36,
+        "dictionary": "DICT_4X4_50",
+        "size_m": 0.035,
+        "pose": [
+          0,
+          0,
+          0.004,
+          0,
+          0,
+          0
+        ]
       },
-      "grasps": [],
-      "manipulation": {
-        "tool_to_grasp_m": 0.167,
-        "grasp_center_z_m": 0.0,
-        "grasp_yaw_rad": 0.0
-      }
-    },
-    {
-      "type": "cube",
-      "object_id": "cube-3",
-      "dimensions_m": [
-        0.04,
-        0.04,
-        0.02
-      ],
-      "marker": {
-        "face": "top",
-        "id": 26,
-        "size_m": 0.037,
-        "center_xy_m": [
-          0.0,
-          0.0
-        ],
-        "yaw_rad": 0.0,
-        "family": "5x5",
-        "dictionary": "DICT_ARUCO_ORIGINAL"
-      },
-      "grasps": [],
-      "manipulation": {
-        "tool_to_grasp_m": 0.167,
-        "grasp_center_z_m": 0.0,
-        "grasp_yaw_rad": 0.0
-      }
-    },
-    {
-      "type": "cube",
-      "object_id": "cube-4",
-      "dimensions_m": [
-        0.04,
-        0.04,
-        0.02
-      ],
-      "marker": {
-        "face": "top",
-        "id": 27,
-        "size_m": 0.037,
-        "center_xy_m": [
-          0.0,
-          0.0
-        ],
-        "yaw_rad": 0.0,
-        "family": "5x5",
-        "dictionary": "DICT_ARUCO_ORIGINAL"
-      },
-      "grasps": [],
-      "manipulation": {
-        "tool_to_grasp_m": 0.167,
-        "grasp_center_z_m": 0.0,
-        "grasp_yaw_rad": 0.0
-      }
+      "grasps": [
+        [
+          0.0457842712474619,
+          0.0457842712474619,
+          0.24100000000000002,
+          3.141592653589793,
+          0,
+          0.7853981633974483
+        ]
+      ]
     }
   ],
   "reset": {
