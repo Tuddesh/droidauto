@@ -27,8 +27,14 @@ def handle_request(manager, config, request, *, execute=False):
         raise ValueError(f"Unknown operation: {operation}")
     if operation == "reset" and not execute:
         raise ValueError("Reset execution requires --execute")
-    if ("scene" in request and request["scene"].get("planar_scene") != config.data.get("planar_scene")):
-        raise ValueError("Saved scene uses a different height/localization model; teach the target again")
+    if "scene" in request:
+        models = [request["scene"].get("planar_scene"), config.data.get("planar_scene")]
+        models = [None if model is None else {
+            key: model.get(key, model["buffer_surface_height_m"])
+            for key in ("table_z_m", "buffer_surface_height_m", "buffer_marker_height_m")
+        } for model in models]
+        if models[0] != models[1]:
+            raise ValueError("Saved scene uses a different height/localization model; teach the target again")
     source = ("supplied" if "observations" in request else "camera"
               if operation in ("observe", "reset") or request.get("detect_objects") else "existing observations")
     manager._record("request_received", operation=operation, object_pose_source=source,
@@ -101,6 +107,9 @@ def main():
         robot = stack.enter_context(DroidRobot(config.data["robot_endpoint"], ik_config=config.data.get("ik")))
         log = EventLog(new_log_path(config.resolve(config.data["log_directory"])), echo=False)
         stack.callback(log.close)
+        if args.initialize_controllers:
+            with redirect_stdout(sys.stderr):
+                robot.initialize()
         options = config.data.get("reset", {})
         calibration_path = config.resolve(config.data["calibration_file"])
         calibration = (BufferCalibration.load(calibration_path)
@@ -124,9 +133,6 @@ def main():
                                position_tolerance_m=options.get("position_tolerance_m", 0.01),
                                orientation_tolerance_rad=options.get("orientation_tolerance_rad", 0.1),
                                motion_timeout_s=options.get("motion_timeout_s", 60.0))
-        if args.initialize_controllers:
-            with redirect_stdout(sys.stderr):
-                robot.initialize()
         if args.scan_buffer:
             with redirect_stdout(sys.stderr):
                 manager.observe(detect_buffer=True)

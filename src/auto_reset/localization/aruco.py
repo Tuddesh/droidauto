@@ -17,7 +17,7 @@ from scene.transforms import transform, transform_to_pose
 
 
 def localize_objects(frames, detector, dictionary_names, objects, base_left_camera,
-                     directory, *, review=False, planar_scene=None, buffer=None):
+                   directory, *, review=False, planar_scene=None, buffer=None, retry_missing=True):
     """Return (base-frame object poses, diagnostics); poses=None requests a retake.
 
 Only explicitly bound dictionary/ID pairs are matched. Missing, duplicated or
@@ -25,12 +25,17 @@ unfittable markers leave their object unobserved. Stereo uses both eyes' corners
 in one reprojection fit; one visible eye also works. No RMS rejection threshold
 is imposed. Missing configured markers are retried at larger image scales in
 each eye using the same detector. All fitted corners use native image coordinates.
-Inputs and annotated frozen frames are saved for every attempt.
+Set retry_missing=False for catalog discovery to skip enlarged-image passes.
+Absent IDs are retained in diagnostics but omitted from console/review output.
+Stationary bursts may contain multiple pairs; repeated detections within a
+single frame remain invalid. All pairs contribute to one pose fit. Every source
+frame is saved; review shows one frozen fitted image per eye.
 """
     base_left_camera = transform(base_left_camera)
     directory.mkdir(parents=True, exist_ok=True)
     report = {"directory": str(directory), "base_left_camera": base_left_camera.tolist(),
-              "eyes": {}, "objects": {}}
+              "eyes": {}, "objects": {}, "captures": []}
+    last_frames = {frame.view: frame for frame in frames}
     bindings, samples, poses, overlays = {}, {}, {}, {}
     for obj in objects.values():
         key = (obj.marker_dictionary, obj.marker_id)
@@ -44,7 +49,7 @@ Inputs and annotated frozen frames are saved for every attempt.
         report["objects"][obj.object_id] = {"dictionary": key[0], "id": key[1],
                                                "error": "Configured marker not detected"}
 
-    for frame in frames:
+    for capture_index, frame in enumerate(frames):
         rgb = frame.image_rgb
         gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
         corners, ids, rejected, indices = detector.detectMarkersMultiDict(gray)
@@ -55,7 +60,7 @@ Inputs and annotated frozen frames are saved for every attempt.
         passes = [{"scale": 1, "rejected_candidates": len(rejected)}]
         seen = {(dictionary_names[int(index)], int(marker_id))
                 for marker_id, index in zip(marker_ids, dictionary_indices)}
-        for scale in (2, 3):
+        for scale in ((2, 3) if retry_missing else ()):
             missing = bindings.keys() - seen
             if not missing:
                 break
@@ -76,11 +81,18 @@ Inputs and annotated frozen frames are saved for every attempt.
         ids = np.asarray(marker_ids, dtype=np.int32).reshape(-1, 1) if marker_ids else None
         annotated = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         eye = {"timestamp_s": frame.timestamp_s, "markers": [],
+               "image_settings": frame.image_settings,
+               "image_size_px": [rgb.shape[1], rgb.shape[0]],
                "serial": frame.serial, "matrix": frame.camera_matrix.tolist(),
                "distortion": frame.distortion.tolist(),
                "left_camera_eye": None if frame.left_camera_eye is None else frame.left_camera_eye.tolist(),
                "rejected_candidates": len(rejected), "detection_passes": passes}
         report["eyes"][frame.view] = eye
+        if len(frames) > len(last_frames):
+            path = directory / f"{frame.view}_sample_{capture_index:02d}_input.png"
+            if not cv2.imwrite(str(path), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)):
+                raise OSError(f"Could not save object scan image: {path}")
+            report["captures"].append({"view": frame.view, "input": str(path), "metadata": eye})
         overlays[frame.view] = annotated
         if ids is not None:
             cv2.aruco.drawDetectedMarkers(annotated, corners, ids)
@@ -109,7 +121,7 @@ Inputs and annotated frozen frames are saved for every attempt.
         result = report["objects"][obj.object_id]
         if not observations:
             continue
-        if len({frame.view for frame, _, _ in observations}) != len(observations):
+        if len({id(frame) for frame, _, _ in observations}) != len(observations):
             result["error"] = "The configured marker appears more than once in an eye"
             continue
         half = obj.marker_size_m / 2
@@ -211,11 +223,16 @@ Inputs and annotated frozen frames are saved for every attempt.
             result.update(base_marker=base_marker.tolist(), base_object=base_object.tolist(),
                           base_xyz_m=base_object[:3, 3].tolist(),
                           base_rpy_deg=np.degrees(transform_to_pose(base_object)[3:]).tolist(),
-                          views=[frame.view for frame, _, _ in observations],
+                          views=list(dict.fromkeys(frame.view for frame, _, _ in observations)),
+                          capture_count=len({id(frame) for frame, _, _ in observations}),
                           reprojection_rms_px=float(np.sqrt(np.mean(np.sum(errors ** 2, axis=2)))),
-                          per_eye_rms_px={frame.view: float(np.sqrt(np.mean(np.sum(error ** 2, axis=1))))
-                                          for (frame, _, _), error in zip(observations, errors)})
-            for frame, _, camera_left in observations:
+                          per_eye_rms_px={view: float(np.sqrt(np.mean(np.sum(
+                              errors[[i for i, (frame, _, _) in enumerate(observations) if frame.view == view]] ** 2,
+                              axis=2)))) for view in dict.fromkeys(frame.view for frame, _, _ in observations)})
+            for frame in last_frames.values():
+                if frame.left_camera_eye is None and frame.view != "left":
+                    continue
+                camera_left = np.linalg.inv(np.eye(4) if frame.left_camera_eye is None else frame.left_camera_eye)
                 camera_marker = camera_left @ left_marker
                 cv2.drawFrameAxes(overlays[frame.view], frame.camera_matrix, frame.distortion,
                                   cv2.Rodrigues(camera_marker[:3, :3])[0], camera_marker[:3, 3],
@@ -224,16 +241,19 @@ Inputs and annotated frozen frames are saved for every attempt.
             poses.pop(obj.object_id, None)
             result["error"] = str(exc)
 
+    # A dictionary catalog contains candidates, not 1024 expected physical cubes.
+    displayed = {key: result for key, result in report["objects"].items()
+                 if retry_missing or result.get("error") != "Configured marker not detected"}
     panels = []
     height = max(frame.image_rgb.shape[0] for frame in frames)
     width = max(frame.image_rgb.shape[1] for frame in frames)
-    for frame in frames:
+    for frame in last_frames.values():
         annotated = overlays[frame.view]
-        panel = np.full((height + 160, width, 3), 25, dtype=np.uint8)
+        panel = np.full((height + max(160, 34 * (len(displayed) + 3)), width, 3), 25, dtype=np.uint8)
         panel[:annotated.shape[0], :annotated.shape[1]] = annotated
-        lines = [f"{frame.view.upper()} | FROZEN object observation",
-                 "1/2 eyes | A accept | R retake | P print poses | Q / window X cancel"]
-        for object_id, result in report["objects"].items():
+        lines = [f"{frame.view.upper()} | FROZEN object observation | {len(frames)} source images",
+                 "1/2 eyes | E exposure bracket | A accept | R retake | P poses | Q cancel"]
+        for object_id, result in displayed.items():
             if "error" in result:
                 lines.append(f"{object_id}: {result['error']}")
             else:
@@ -251,10 +271,14 @@ Inputs and annotated frozen frames are saved for every attempt.
             paths[suffix] = str(path)
         report["eyes"][frame.view]["images"] = paths
         panels.append(panel)
+    comparison = ((frames[0].image_settings or {}).get("search") or {}).get("contact_sheet")
+    exposure_panel = cv2.imread(comparison) if comparison else None
+    if exposure_panel is not None:
+        panels.append(exposure_panel)
     report_path = directory / "evaluation.json"
     report_path.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
     print(f"Object scan images and evaluation: {directory}", flush=True)
-    for object_id, result in report["objects"].items():
+    for object_id, result in displayed.items():
         if "error" in result:
             print(f"{object_id}: {result['error']}", flush=True)
         else:
@@ -281,9 +305,13 @@ Inputs and annotated frozen frames are saved for every attempt.
                     if key == 27 or not visible:
                         choice = "q"
                 else:
-                    choice = input("Frozen object scan [a=accept, r=retake, p=print poses, q=cancel]> ").strip().lower()
+                    choice = input("Frozen object scan [a=accept, r=retake, e=exposure bracket, p=poses, q=cancel]> ").strip().lower()
                 if choice in ("1", "2"):
-                    selected = min(int(choice) - 1, len(panels) - 1)
+                    selected = min(int(choice) - 1, len(last_frames) - 1)
+                elif choice == "e" and exposure_panel is not None:
+                    selected = len(panels) - 1
+                    if not gui:
+                        print(f"Exposure comparison: {comparison}", flush=True)
                 elif choice == "p":
                     print(json.dumps(report["objects"], indent=2), flush=True)
                 elif choice == "r":

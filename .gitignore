@@ -1,5 +1,5 @@
 # Local datasets, captures, model outputs, and checkpoints
-experiments/
+/experiments/
 /data/
 /configs/*.local.json
 /object_detector/

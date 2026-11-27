@@ -31,8 +31,9 @@ pose and source image; subsequent resets reuse that fixed pose.
 - Reset execution repeats scene observation, target comparison and one
   pick-and-place action, returning to the observation pose after each action.
   It completes only when a fresh measured scene meets all requested targets.
-  Off-target placements are replanned without a fixed retry limit; cancellation
-  and hardware/capture failures stop the operation.
+  Retries are unlimited by default. Explicit `reset.max_transfers_per_cube`
+  and `reset.max_reobservations` settings can bound transfers and missing-object
+  scans. Cancellation and hardware/capture failures stop the operation.
 - Events, commands, errors and final placement deviations are logged as JSONL.
 
 This is a simple endpoint transfer planner, not collision-aware path planning.
@@ -146,6 +147,59 @@ Python methods are in [the reset framework](src/auto_reset/README.md).
 A one-shot reset process exits after measured completion, cancellation or an
 error. The JSON-lines process retains the manager and camera between requests.
 An explicit `verify` request can reassess a completed reset from supplied poses.
+
+## Placement experiments
+
+Run the direct placement experiment from the lab environment:
+
+```bash
+python scripts/run_placement_experiment.py --execute
+```
+
+The runner scans all visible movable cubes at the saved DROID-home joints, picks
+one, performs the established above-cube scan to refine its pickup pose, then
+plans and executes one transfer to a clear grid cell. It returns to the same home
+joints and measures signed X/Y error, XY distance and yaw error. Scene and
+close-up scans fit five captures each by default. Incomplete scene scans get up
+to three attempts, retaining fresh detections across those attempts. That scene
+measurement also supplies the next pickup and obstacle map. There is no random
+table staging, corrective transfer or repeated buffer calibration. Camera and
+CUDA solver instances stay open.
+
+`cube_dictionary_template` names a configured cube whose physical geometry,
+marker mounting and grasp apply to every ID in its dictionary. Existing explicit
+identities are preserved; other IDs receive `cube-DICT_ARUCO_ORIGINAL-<id>` names.
+This optional catalog is for cube-only experiment configurations. The normal
+scene reset uses only the explicitly configured objects. Absent catalog entries are candidates,
+not missing physical objects; experiment scans use native-resolution detection
+without upscaling to search for all 1024 IDs.
+
+Targets leave one whole cell clear in every direction (including diagonals)
+from other cubes' measured, rotated footprints and installed grid fixtures.
+Previously placed cubes stay as obstacles; failed placements use their actual
+footprints. Each visible cube gets a turn before previously used cubes are
+selected again when feasible. When all cubes have been used, the runner can
+relocate them to other clear cells until `--runs` attempts have been logged.
+Failed detections, scans, planning and placement checks are recorded per trial;
+the batch continues with other visible cubes. A blocked fixed target skips that
+trial and allows the next target to be attempted. Missing cubes retain their
+last known footprints as obstacles; an unobserved transferred cube also reserves
+its destination until detected again. Motion failures require fresh stationary
+feedback and an empty gripper before returning home and continuing; unavailable
+feedback or an uncertain held cube prevents recovery. Cancellation still stops
+the batch. Clearance checks cover destination footprints; the transit corridor
+must remain clear for endpoint robot motion.
+
+`--initialize-controllers` explicitly initializes controllers; `--review` enables
+frozen scan review. `--runs`, `--seed` and `--object cube-1` override selection;
+`--captures` and `--scan-attempts` override burst size and scene retry count.
+`--object` still observes all other cubes as obstacles. `--scan-buffer` refreshes
+the otherwise cached buffer calibration before starting. Fixed `target_cells`
+are attempted in order (cycling) and obey the same clearance rules.
+Home joints are in `configs/placement_experiment.example.json`. Results under
+ignored `runs/placement_experiments/` include flushed trial CSV, JSONL events,
+the station configuration and initial scene, and a summary. Ctrl+C retains
+completed measurements. Normal feedback resets keep their existing behavior.
 
 ## Docker
 

@@ -5,6 +5,7 @@ It constructs configured objects, buffer targets and the reset planner without
 opening cameras or robot connections. Observed poses are supplied separately.
 """
 
+from copy import deepcopy
 import hashlib
 import json
 import math
@@ -37,8 +38,8 @@ class StationConfig:
         self.camera = self.data.get("camera", {})
         planar = self.data.get("planar_scene")
         if planar is not None:
-            for key in ("table_z_m", "buffer_surface_height_m", "buffer_marker_height_m"):
-                if key == "buffer_marker_height_m" and key not in planar:
+            for key in ("table_z_m", "buffer_surface_height_m", "buffer_marker_height_m", "buffer_bottom_height_m"):
+                if key not in planar and key in ("buffer_marker_height_m", "buffer_bottom_height_m"):
                     continue
                 if isinstance(planar[key], bool) or not math.isfinite(planar[key]):
                     raise ValueError(f"planar_scene.{key} must be finite metres")
@@ -132,6 +133,27 @@ class StationConfig:
             if marker.get("id") is not None:
                 obj.bind_marker(marker["id"], marker["dictionary"])
             objects[object_id] = obj
+        template_id = self.data.get("cube_dictionary_template")
+        if template_id is not None:
+            if template_id not in objects or not isinstance(objects[template_id], Cube):
+                raise ValueError("cube_dictionary_template must name a configured cube")
+            template = objects[template_id]
+            if template.marker_dictionary is None:
+                raise ValueError("Cube dictionary template must have a bound marker")
+            dictionary = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, template.marker_dictionary))
+            bound = {(obj.marker_dictionary, obj.marker_id) for obj in objects.values()}
+            bound.update((self.layout["dictionary"], marker["id"]) for marker in self.layout["markers"])
+            for marker_id in range(len(dictionary.bytesList)):
+                if (template.marker_dictionary, marker_id) in bound:
+                    continue
+                object_id = f"cube-{template.marker_dictionary}-{marker_id}"
+                if object_id in objects:
+                    raise ValueError(f"Duplicate physical object identity: {object_id}")
+                cube = deepcopy(template)
+                cube.object_id = object_id
+                cube.marker_id = None
+                cube.bind_marker(marker_id, template.marker_dictionary)
+                objects[object_id] = cube
         return objects
 
     @staticmethod

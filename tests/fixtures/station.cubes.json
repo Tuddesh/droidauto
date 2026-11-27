@@ -1,0 +1,178 @@
+{
+  "buffer": {
+    "object_id": "buffer-main",
+    "columns": 6,
+    "rows": 6,
+    "cell_size_mm": 42.0,
+    "origin": [
+      0,
+      0
+    ],
+    "dictionary": "DICT_4X4_50",
+    "marker_orientation": "independent",
+    "markers": [
+      {
+        "object_id": "buffer-marker-0",
+        "id": 0,
+        "column": 0,
+        "row": 0,
+        "size_mm": 32.0
+      },
+      {
+        "object_id": "buffer-marker-1",
+        "id": 1,
+        "column": 0,
+        "row": 5,
+        "size_mm": 32.0
+      },
+      {
+        "object_id": "buffer-marker-2",
+        "id": 2,
+        "column": 5,
+        "row": 5,
+        "size_mm": 32.0
+      }
+    ]
+  },
+  "objects": [
+    {
+      "type": "cube",
+      "object_id": "cube-1",
+      "dimensions_m": [
+        0.04,
+        0.04,
+        0.02
+      ],
+      "marker": {
+        "face": "top",
+        "id": 5,
+        "size_m": 0.037,
+        "center_xy_m": [
+          0.0,
+          0.0
+        ],
+        "yaw_rad": 0.0,
+        "family": "5x5",
+        "dictionary": "DICT_ARUCO_ORIGINAL"
+      },
+      "grasps": [],
+      "manipulation": {
+        "tool_to_grasp_m": 0.167,
+        "grasp_center_z_m": 0.0,
+        "grasp_yaw_rad": 0.0
+      }
+    },
+    {
+      "type": "cube",
+      "object_id": "cube-2",
+      "dimensions_m": [
+        0.04,
+        0.04,
+        0.02
+      ],
+      "marker": {
+        "face": "top",
+        "id": 3,
+        "size_m": 0.037,
+        "center_xy_m": [
+          0.0,
+          0.0
+        ],
+        "yaw_rad": 0.0,
+        "family": "5x5",
+        "dictionary": "DICT_ARUCO_ORIGINAL"
+      },
+      "grasps": [],
+      "manipulation": {
+        "tool_to_grasp_m": 0.167,
+        "grasp_center_z_m": 0.0,
+        "grasp_yaw_rad": 0.0
+      }
+    },
+    {
+      "type": "cube",
+      "object_id": "cube-3",
+      "dimensions_m": [
+        0.04,
+        0.04,
+        0.02
+      ],
+      "marker": {
+        "face": "top",
+        "id": 26,
+        "size_m": 0.037,
+        "center_xy_m": [
+          0.0,
+          0.0
+        ],
+        "yaw_rad": 0.0,
+        "family": "5x5",
+        "dictionary": "DICT_ARUCO_ORIGINAL"
+      },
+      "grasps": [],
+      "manipulation": {
+        "tool_to_grasp_m": 0.167,
+        "grasp_center_z_m": 0.0,
+        "grasp_yaw_rad": 0.0
+      }
+    },
+    {
+      "type": "cube",
+      "object_id": "cube-4",
+      "dimensions_m": [
+        0.04,
+        0.04,
+        0.02
+      ],
+      "marker": {
+        "face": "top",
+        "id": 27,
+        "size_m": 0.037,
+        "center_xy_m": [
+          0.0,
+          0.0
+        ],
+        "yaw_rad": 0.0,
+        "family": "5x5",
+        "dictionary": "DICT_ARUCO_ORIGINAL"
+      },
+      "grasps": [],
+      "manipulation": {
+        "tool_to_grasp_m": 0.167,
+        "grasp_center_z_m": 0.0,
+        "grasp_yaw_rad": 0.0
+      }
+    }
+  ],
+  "planar_scene": {
+    "table_z_m": -0.04,
+    "buffer_bottom_height_m": 0.04,
+    "buffer_marker_height_m": 0.06,
+    "buffer_surface_height_m": 0.048
+  },
+  "reset": {
+    "home_joints_rad": [
+      -0.014233452278911247,
+      -0.6135982081418461,
+      0.014630441317634612,
+      -2.504110387305075,
+      0.004121551259886019,
+      1.8648558356542633,
+      0.004391114317225282
+    ],
+    "rescan_before_pick": true,
+    "scan_distance_m": 0.25,
+    "scan_settle_s": 2.5,
+    "scan_velocity_threshold_rad_s": 0.005,
+    "scan_capture_count": 5,
+    "transit_height_m": 0.4,
+    "lift_clearance_m": 0.08,
+    "position_tolerance_m": 0.01,
+    "orientation_tolerance_rad": 0.1,
+    "max_transfers_per_cube": 3,
+    "max_reobservations": 2,
+    "motion_timeout_s": 60.0
+  },
+  "cube_dictionary_template": "cube-1",
+  "log_directory": "../../../runs/reset"
+}

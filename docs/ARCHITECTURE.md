@@ -96,8 +96,11 @@ Task-object poses are invalidated when a transfer starts. Every completed
 manipulation is followed by another scene scan; commanded targets never become
 observations. The first observed off-target object in target order is selected
 again from each new scene. Missing detections cannot establish success. With no
-observed off-target object, the loop rescans until objects are visible or cancelled.
-There is no fixed retry limit. Controller/capture exceptions terminate as failures.
+observed off-target object, the loop observes again without moving.
+Retries are unlimited unless `reset.max_reobservations` or
+`reset.max_transfers_per_cube` is explicitly configured. Those limits end an
+unsuccessful request after exhausted observations or transfers, respectively.
+Controller/capture exceptions terminate as failures.
 State is held in memory for the process lifetime; JSONL logs retain events.
 The JSON-lines process retains the camera and manager between reset requests.
 

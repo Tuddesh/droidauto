@@ -70,6 +70,11 @@ class ResetManager:
     def __post_init__(self):
         # Available to observe() for object detection as well as buffer scans.
         self.aruco_detector = self.buffer.aruco_detector
+        if self.camera is not None:
+            self.camera.aruco_detector = self.aruco_detector
+            if self.station_config is not None:
+                self.camera.exposure_directory = self.station_config.resolve(
+                    self.station_config.data["log_directory"]) / "exposure_searches"
         for value in (self.position_tolerance_m, self.orientation_tolerance_rad, self.motion_timeout_s):
             if not math.isfinite(value) or value <= 0:
                 raise ValueError("Verification tolerances and motion timeout must be positive")
@@ -106,7 +111,8 @@ class ResetManager:
 
     def observe(self, observations: Mapping[str, np.ndarray] | None = None, *,
                 timestamp: float | None = None, detect_buffer: bool = False,
-                detect_objects: bool = False, object_ids: tuple[str, ...] | None = None) -> dict:
+                detect_objects: bool = False, object_ids: tuple[str, ...] | None = None,
+                capture_count: int = 1, retry_missing: bool = True) -> dict:
         """Accept supplied poses or capture object markers with the shared detector.
 
         In an explicit observation batch, omitted task objects become unobserved.
@@ -116,11 +122,19 @@ class ResetManager:
         detect_objects=True captures current object poses; missing objects become
         unobserved. Scan diagnostics are retained in state['last_observation'].
         The caller owns one open camera session for the manager's lifetime.
+        Automatic scans wait for sustained low joint velocities. A close-up
+        can fit multiple stereo pairs from the same stationary camera pose.
+        retry_missing=False skips enlarged-image searches for absent catalog IDs.
         """
         if detect_objects and observations is not None:
             raise ValueError("Choose camera object detection or supplied object poses")
         if object_ids is not None and not detect_objects:
             raise ValueError("object_ids selects objects for camera detection only")
+        if isinstance(capture_count, bool) or not isinstance(capture_count, int) or capture_count < 1:
+            raise ValueError("capture_count must be a positive integer")
+        options = {} if self.station_config is None else self.station_config.data.get("reset", {})
+        scan_settle_s = float(options.get("scan_settle_s", 2.5))
+        scan_velocity = float(options.get("scan_velocity_threshold_rad_s", 0.005))
         selected = self.objects if object_ids is None else {key: self.objects[key] for key in object_ids}
         if detect_objects:
             if self._state["phase"] in ("planning", "executing"):
@@ -156,7 +170,8 @@ class ResetManager:
             self._record("buffer_detection_started")
             # Automatic base-frame composition needs live feedback around the
             # capture; a frozen pre-stop pose must not become a new calibration.
-            self.robot.read_state()
+            self.robot.wait_until_stopped(timeout_s=self.motion_timeout_s,
+                                          settle_s=scan_settle_s, velocity_threshold_rad_s=scan_velocity)
             self.camera.set_auto_exposure_roi(self.station_config.camera.get("auto_exposure_roi"))
             calibration = capture_calibration(self.station_config, self.robot, self.camera,
                                               review=self.station_config.camera.get("review_capture", False))
@@ -178,11 +193,29 @@ class ResetManager:
                 camera = self.camera
                 camera.set_auto_exposure_roi(config.camera.get("auto_exposure_roi"))
                 while True:
-                    self.robot.read_state()
-                    frames = camera.capture_pair() if camera.view == "stereo" else [camera.capture()]
-                    if not frames or any(frame.serial != str(config.camera["serial"]) for frame in frames):
-                        raise ValueError("Object scan does not match the configured camera")
-                    base_tool = self.robot.read_state().tool_pose
+                    if self._cancel_requested.is_set():
+                        raise ResetCancelled("Cancellation requested before object capture")
+                    self.robot.wait_until_stopped(timeout_s=self.motion_timeout_s,
+                                                  settle_s=scan_settle_s, velocity_threshold_rad_s=scan_velocity)
+                    frames = []
+                    for _ in range(capture_count):
+                        if self._cancel_requested.is_set():
+                            raise ResetCancelled("Cancellation requested during object capture")
+                        before = self.robot.read_state()
+                        if np.max(np.abs(before.joint_velocities)) > scan_velocity:
+                            break
+                        pair = camera.capture_pair() if camera.view == "stereo" else [camera.capture()]
+                        if (len(pair) != (2 if camera.view == "stereo" else 1)
+                                or any(frame.serial != str(config.camera["serial"]) for frame in pair)):
+                            raise ValueError("Object scan does not match the configured camera")
+                        after = self.robot.read_state()
+                        if np.max(np.abs(after.joint_velocities)) > scan_velocity:
+                            break
+                        frames.extend(pair)
+                    if len(frames) != capture_count * (2 if camera.view == "stereo" else 1):
+                        self._record("object_capture_restarted", reason="Arm moving during capture")
+                        continue
+                    base_tool = after.tool_pose
                     if "tool_left_camera_pose" in config.camera:
                         tool_left = pose_to_transform(config.camera["tool_left_camera_pose"])
                     elif self.calibration is not None and "tool_left_camera" in self.calibration.record:
@@ -204,7 +237,7 @@ class ResetManager:
                         frames, self.aruco_detector, config.aruco_dictionary_names,
                         selected, base_tool @ tool_left, directory,
                         review=config.camera.get("review_capture", False),
-                        planar_scene=config.data.get("planar_scene"), buffer=self.buffer,
+                        planar_scene=config.data.get("planar_scene"), buffer=self.buffer, retry_missing=retry_missing,
                     )
                     report["tool_left_camera"] = tool_left.tolist()
                     self._state["last_observation"] = report
@@ -293,12 +326,15 @@ class ResetManager:
         return actions
 
     def reset(self, target_configuration: TargetConfiguration, *, rescan_objects: bool | None = None,
-              use_current_observations: bool = False, detect_buffer: bool = False) -> None:
+              use_current_observations: bool = False, detect_buffer: bool = False,
+              max_manipulations: int | None = None, rescan_buffer_after_action: bool = False) -> None:
         """Observe/compare/execute one manipulation repeatedly until the target is measured.
 
         Every completed manipulation returns to the starting observation pose.
         The next full scene observation determines the next action, including
-        retries of misplaced objects. There is no fixed manipulation limit.
+        retries of misplaced objects. Retries are unlimited unless the station
+        explicitly configures max_transfers_per_cube or max_reobservations.
+        Experiments can also cap the total and return the measured result.
         Caller-supplied observations may seed only the first iteration; later
         iterations always capture fresh images with the existing station camera.
         """
@@ -309,11 +345,15 @@ class ResetManager:
             self.target_configuration = deepcopy(target_configuration)
             self._state.update(phase="observing", current_action=None, success=None,
                                scene_before=None, scene_after=None, iterations=0, manipulations=0,
+                               transfers_per_object={}, reobservations=0,
                                object_placement_errors={}, failure_reason=None,
                                timing={"started_s": time.time()})
             try:
                 if self.robot is None:
                     raise ValueError("Reset execution needs a connected robot backend")
+                if max_manipulations is not None and (isinstance(max_manipulations, bool)
+                        or not isinstance(max_manipulations, int) or max_manipulations < 1):
+                    raise ValueError("max_manipulations must be a positive integer or None")
                 if self.camera is None or self.station_config is None:
                     raise ValueError("Feedback reset requires an open station camera and configuration for rescanning")
                 if self.target_configuration.buffer_id != self.buffer.object_id:
@@ -332,7 +372,17 @@ class ResetManager:
                 options = self.station_config.data.get("reset", {})
                 if rescan_objects is None:
                     rescan_objects = options.get("rescan_before_pick", True)
+                per_object_limit = options.get("max_transfers_per_cube")
+                if per_object_limit is not None and (isinstance(per_object_limit, bool)
+                        or not isinstance(per_object_limit, int) or per_object_limit < 1):
+                    raise ValueError("reset.max_transfers_per_cube must be a positive integer")
+                reobservation_limit = options.get("max_reobservations")
+                if reobservation_limit is not None and (isinstance(reobservation_limit, bool)
+                        or not isinstance(reobservation_limit, int) or reobservation_limit < 0):
+                    raise ValueError("reset.max_reobservations must be a nonnegative integer")
                 self._record("reset_started", observation_tool_pose=observation_tool_pose.tolist(),
+                             max_manipulations=max_manipulations, max_transfers_per_cube=per_object_limit,
+                             max_reobservations=reobservation_limit,
                              targets={key: value.tolist() for key, value in self.target_configuration.poses.items()})
                 while True:
                     if self._cancel_requested.is_set():
@@ -344,7 +394,8 @@ class ResetManager:
                         self._record("initial_observations_used", scene=self.observe())
                     else:
                         self.observe(detect_objects=True,
-                                     detect_buffer=detect_buffer and self._state["iterations"] == 0,
+                                     detect_buffer=(detect_buffer and self._state["iterations"] == 0
+                                                    or rescan_buffer_after_action and self._state["manipulations"] > 0),
                                      object_ids=tuple(self.target_configuration.poses))
                     self._state["iterations"] += 1
                     if self._state["scene_before"] is None:
@@ -354,16 +405,37 @@ class ResetManager:
                     if self._cancel_requested.is_set():
                         raise ResetCancelled("Cancellation requested after scene observation")
                     errors = self._state["object_placement_errors"]
-                    if all(error["within_tolerance"] for error in errors.values()):
+                    if (all(error["within_tolerance"] for error in errors.values())
+                            or max_manipulations is not None and self._state["manipulations"] >= max_manipulations):
                         self._verify(self.target_configuration)
                         break
                     pending = [key for key in self.target_configuration.poses
                                if errors[key]["observed"] and not errors[key]["within_tolerance"]]
                     if not pending:
+                        missing = [key for key, error in errors.items() if not error["observed"]]
                         self._record("scene_observation_incomplete", iteration=self._state["iterations"],
-                                     missing_objects=[key for key, error in errors.items() if not error["observed"]])
+                                     missing_objects=missing)
+                        if reobservation_limit is not None and self._state["reobservations"] >= reobservation_limit:
+                            self._record("observation_limit_reached", object_ids=missing,
+                                         max_reobservations=reobservation_limit)
+                            self._verify(self.target_configuration)
+                            self._state["failure_reason"] = (f"Not detected in {reobservation_limit + 1} "
+                                                             "observations without motion: " + ", ".join(missing))
+                            break
+                        self._state["reobservations"] += 1
                         continue
-                    object_id = pending[0]
+                    transfers = self._state["transfers_per_object"]
+                    exhausted = [key for key in pending if per_object_limit is not None
+                                 and transfers.get(key, 0) >= per_object_limit]
+                    actionable = [key for key in pending if key not in exhausted]
+                    if not actionable:
+                        self._record("transfer_limit_reached", object_ids=exhausted,
+                                     max_transfers_per_cube=per_object_limit)
+                        self._verify(self.target_configuration)
+                        self._state["failure_reason"] = (f"Not in place after {per_object_limit} transfers: "
+                                                         + ", ".join(exhausted))
+                        break
+                    object_id = actionable[0]
                     target = TargetConfiguration(buffer_id=self.target_configuration.buffer_id,
                                                  poses={object_id: self.target_configuration.poses[object_id]})
                     self._record("reset_action_selected", iteration=self._state["iterations"],
@@ -389,6 +461,8 @@ class ResetManager:
                         self.objects[key].mark_unobserved()
                     self._execute(actions)
                     self._state["manipulations"] += 1
+                    transfers[object_id] = transfers.get(object_id, 0) + 1
+                    self._state["reobservations"] = 0
                     self._record("reset_action_finished", object_id=object_id,
                                  manipulation=self._state["manipulations"])
             except (Exception, KeyboardInterrupt) as exc:
@@ -414,9 +488,13 @@ class ResetManager:
             self._state["current_action"] = {"index": index, **action}
             self._record("action_started", **self._state["current_action"])
             kind = action["type"]
+            reached = {}
             if kind == "move":
                 self.robot.command_joints(action["joints"], blocking=True)
                 self.robot.wait_until_stopped(timeout_s=self.motion_timeout_s)
+                # Where the arm settled, for comparison with the commanded endpoint.
+                state = self.robot.read_state()
+                reached = {"reached_tool_pose": state.tool_pose.tolist(), "reached_joints": state.joints.tolist()}
             elif kind == "open_gripper":
                 self.robot.open_gripper()
             elif kind == "close_gripper":
@@ -428,7 +506,9 @@ class ResetManager:
                 coarse_timestamp = obj.observed_at
                 self._state["phase"] = "observing"
                 try:
-                    self.observe(detect_objects=True, object_ids=(object_id,))
+                    options = {} if self.station_config is None else self.station_config.data.get("reset", {})
+                    self.observe(detect_objects=True, object_ids=(object_id,),
+                                 capture_count=action.get("capture_count", options.get("scan_capture_count", 5)))
                 finally:
                     self._state["phase"] = "executing"
                 if obj.pose is None:
@@ -442,7 +522,7 @@ class ResetManager:
                     self._record("object_pose_refined", object_id=object_id, pose=obj.pose.tolist())
             else:
                 raise ValueError(f"Unknown reset action: {kind}")
-            self._record("action_finished", index=index, name=action["name"])
+            self._record("action_finished", index=index, name=action["name"], **reached)
         if self._cancel_requested.is_set():
             raise ResetCancelled("Cancellation requested after final command")
 
