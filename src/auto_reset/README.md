@@ -86,9 +86,10 @@ can be combined with object detection to refresh the buffer too.
 `manager.plan(target, current_tool_pose=...)` is offline; omit the tool pose to
 read it from a connected robot. `solve_ik=True` additionally needs measured
 starting joints and the configured local CUDA solver. `manager.reset(target)`
+first commands `reset.home_joints_rad` and waits for motion to settle, then
 scans all requested objects, compares measured poses with targets, and selects
 the first observed off-target object in target order. It executes one transfer,
-returns to the original observation pose, rescans all task objects, and chooses
+returns to the home observation pose, rescans all task objects, and chooses
 again. A failed placement or another displaced object therefore changes the
 next plan. Completion requires all requested objects to be observed within the
 configured tolerances. There is no fixed retry limit; `cancel()` or an exception

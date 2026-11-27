@@ -137,7 +137,7 @@ class ResetManager:
         scan_velocity = float(options.get("scan_velocity_threshold_rad_s", 0.005))
         selected = self.objects if object_ids is None else {key: self.objects[key] for key in object_ids}
         if detect_objects:
-            if self._state["phase"] in ("planning", "executing"):
+            if self._state["phase"] in ("homing", "planning", "executing"):
                 raise RuntimeError("Cannot replace observations during reset execution")
             if self.camera is None or self.robot is None or self.station_config is None:
                 raise ValueError("Object detection needs the station camera, robot connection and configuration")
@@ -146,7 +146,7 @@ class ResetManager:
             self._state.pop("last_observation", None)
         checked = {}
         if observations is not None:
-            if self._state["phase"] in ("planning", "executing"):
+            if self._state["phase"] in ("homing", "planning", "executing"):
                 raise RuntimeError("Cannot replace observations during reset execution")
             self._state.pop("last_observation", None)
             timestamp = time.time() if timestamp is None else float(timestamp)
@@ -159,7 +159,7 @@ class ResetManager:
                 raise KeyError(f"Unknown observed object(s): {sorted(unknown)}")
             checked = {key: transform(value) for key, value in observations.items()}
         if detect_buffer or ((observations is not None or detect_objects) and self.buffer.pose is None):
-            if self._state["phase"] == "executing":
+            if self._state["phase"] in ("homing", "executing"):
                 raise RuntimeError("Cannot rescan the buffer during execution")
             if self.camera is None or self.robot is None or self.station_config is None:
                 raise ValueError("Buffer detection needs the station camera, robot connection and configuration")
@@ -327,16 +327,20 @@ class ResetManager:
 
     def reset(self, target_configuration: TargetConfiguration, *, rescan_objects: bool | None = None,
               use_current_observations: bool = False, detect_buffer: bool = False,
-              max_manipulations: int | None = None, rescan_buffer_after_action: bool = False) -> None:
+              max_manipulations: int | None = None, rescan_buffer_after_action: bool = False,
+              observations: Mapping[str, np.ndarray] | None = None, timestamp: float | None = None) -> None:
         """Observe/compare/execute one manipulation repeatedly until the target is measured.
 
-        Every completed manipulation returns to the starting observation pose.
+        Each reset homes before its first scan. Every completed manipulation
+        returns to that home observation pose.
         The next full scene observation determines the next action, including
         retries of misplaced objects. Retries are unlimited unless the station
         explicitly configures max_transfers_per_cube or max_reobservations.
         Experiments can also cap the total and return the measured result.
         Caller-supplied observations may seed only the first iteration; later
         iterations always capture fresh images with the existing station camera.
+        Supplied observations are applied after homing, including any required
+        buffer acquisition; they cannot trigger a pre-home camera capture.
         """
         if not self._run_lock.acquire(blocking=False):
             raise RuntimeError("A reset is already executing")
@@ -363,12 +367,13 @@ class ResetManager:
                 unknown = set(self.target_configuration.poses) - self.objects.keys()
                 if unknown:
                     raise KeyError(f"Unknown target object(s): {sorted(unknown)}")
+                if observations is not None and set(observations) - self.objects.keys():
+                    raise KeyError(f"Unknown observed object(s): {sorted(set(observations) - self.objects.keys())}")
                 if self.station_config.data.get("planar_scene") is not None:
                     self.target_configuration.poses = self.station_config.make_target(
                         {key: {"pose": pose} for key, pose in self.target_configuration.poses.items()},
                         self.buffer, self.objects,
                     ).poses
-                observation_tool_pose = self.robot.read_state().tool_pose.copy()
                 options = self.station_config.data.get("reset", {})
                 if rescan_objects is None:
                     rescan_objects = options.get("rescan_before_pick", True)
@@ -380,10 +385,37 @@ class ResetManager:
                 if reobservation_limit is not None and (isinstance(reobservation_limit, bool)
                         or not isinstance(reobservation_limit, int) or reobservation_limit < 0):
                     raise ValueError("reset.max_reobservations must be a nonnegative integer")
+                home = np.asarray(options.get("home_joints_rad"), dtype=float)
+                if home.shape != (7,) or not np.isfinite(home).all():
+                    raise ValueError("Set reset.home_joints_rad to seven finite home joint angles")
+                if self._cancel_requested.is_set():
+                    raise ResetCancelled("Cancellation requested before homing")
+                self._state["phase"] = "homing"
+                self._state["current_action"] = {"type": "move", "name": "home", "joints": home.tolist()}
+                self._record("reset_home_started", joints=home.tolist())
+                print("Moving home before observing the scene...", flush=True)
+                self.robot.command_joints(home.tolist(), blocking=True)
+                self.robot.wait_until_stopped(
+                    timeout_s=self.motion_timeout_s, settle_s=options.get("scan_settle_s", 2.5),
+                    velocity_threshold_rad_s=options.get("scan_velocity_threshold_rad_s", 0.005),
+                )
+                if self._cancel_requested.is_set():
+                    raise ResetCancelled("Cancellation requested after homing")
+                observation_tool_pose = self.robot.read_state().tool_pose.copy()
+                self._state.pop("last_observation", None)
+                if not use_current_observations:
+                    for obj in self.objects.values():
+                        obj.mark_unobserved()
+                self._record("reset_home_finished", tool_pose=observation_tool_pose.tolist())
                 self._record("reset_started", observation_tool_pose=observation_tool_pose.tolist(),
                              max_manipulations=max_manipulations, max_transfers_per_cube=per_object_limit,
                              max_reobservations=reobservation_limit,
                              targets={key: value.tolist() for key, value in self.target_configuration.poses.items()})
+                if observations is not None:
+                    self._state["phase"] = "observing"
+                    self.observe(observations, detect_buffer=detect_buffer, timestamp=timestamp)
+                    use_current_observations = True
+                    detect_buffer = False
                 while True:
                     if self._cancel_requested.is_set():
                         raise ResetCancelled("Cancellation requested before scene observation")

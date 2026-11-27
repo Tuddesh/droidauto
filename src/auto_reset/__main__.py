@@ -46,8 +46,9 @@ def handle_request(manager, config, request, *, execute=False):
         if "observations" in request:
             if request.get("detect_objects"):
                 raise ValueError("Choose detect_objects or supplied observations")
-            manager.observe({key: config.read_pose(value) for key, value in request["observations"].items()},
-                            timestamp=request.get("timestamp_s"))
+            if operation != "reset":
+                manager.observe({key: config.read_pose(value) for key, value in request["observations"].items()},
+                                timestamp=request.get("timestamp_s"))
         elif operation != "reset" and (operation == "observe" or request.get("detect_objects")):
             manager.observe(detect_objects=True, detect_buffer=request.get("detect_buffer", False))
         if operation in ("plan", "reset"):
@@ -60,8 +61,10 @@ def handle_request(manager, config, request, *, execute=False):
                 return {"actions": actions, "state": dict(manager.state)}
             print("Feedback reset: rescan and reassess after each manipulation", file=sys.stderr, flush=True)
             manager.reset(target, rescan_objects=request.get("rescan_objects"),
-                          use_current_observations="observations" in request,
-                          detect_buffer=request.get("detect_buffer", False))
+                          detect_buffer=request.get("detect_buffer", False),
+                          observations=None if "observations" not in request else
+                          {key: config.read_pose(value) for key, value in request["observations"].items()},
+                          timestamp=request.get("timestamp_s"))
     response = {"state": dict(manager.state)}
     if operation == "observe":
         response["observations"] = manager.observe()
@@ -134,8 +137,11 @@ def main():
                                orientation_tolerance_rad=options.get("orientation_tolerance_rad", 0.1),
                                motion_timeout_s=options.get("motion_timeout_s", 60.0))
         if args.scan_buffer:
-            with redirect_stdout(sys.stderr):
-                manager.observe(detect_buffer=True)
+            if request is not None and request.get("operation") == "reset":
+                request["detect_buffer"] = True
+            else:
+                with redirect_stdout(sys.stderr):
+                    manager.observe(detect_buffer=True)
         records = [json.dumps(request)] if args.request else sys.stdin
         for record in records:
             if not record.strip():

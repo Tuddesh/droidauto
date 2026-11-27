@@ -28,6 +28,8 @@ pose and source image; subsequent resets reuse that fixed pose.
   interpolation or client-side positional-error gate. cuRobo solves endpoint IK
   on the local CUDA GPU; DROID executes the resulting joint targets. The client
   waits for joint motion to settle before sending another endpoint.
+- Each reset task first homes using `reset.home_joints_rad` and waits for the
+  arm to settle. Scans start from home; the fixed buffer calibration is reused.
 - Reset execution repeats scene observation, target comparison and one
   pick-and-place action, returning to the observation pose after each action.
   It completes only when a fresh measured scene meets all requested targets.
