@@ -31,11 +31,11 @@ class SceneObject(PhysicalObject):
 
 @dataclass(kw_only=True, eq=False)
 class Cube(SceneObject):
-    """The project's 40 x 40 x 20 mm marker-topped manipulation block.
+    """A marker-topped cuboid; defaults describe the original 40 x 40 x 20 mm block.
 
     The object origin is its geometric center. X/Y span the square base and
     +Z points toward the centered 40 mm top marker. The marker's +Z must point
-    outward from that face. Its ID and concrete 5x5-pattern dictionary can be
+    outward from that face. Its ID and concrete ArUco dictionary can be
     bound once from a confirmed localization. Marker yaw relative to the
     cube's physical X/Y edges is explicit; centering does not establish yaw.
     Images are localized externally. Top grasps require a measured tool offset.
@@ -90,11 +90,13 @@ class Cube(SceneObject):
         5x5-pattern dictionary. This method does not choose among visible candidates.
         StationConfig.save_marker_binding() can persist the resulting identity.
         """
-        supported = {"DICT_5X5_50": 50, "DICT_5X5_100": 100,
+        supported = {"DICT_4X4_50": 50, "DICT_4X4_100": 100,
+                     "DICT_4X4_250": 250, "DICT_4X4_1000": 1000,
+                     "DICT_5X5_50": 50, "DICT_5X5_100": 100,
                      "DICT_5X5_250": 250, "DICT_5X5_1000": 1000,
                      "DICT_ARUCO_ORIGINAL": 1024}
         if dictionary not in supported:
-            raise ValueError("Cube marker must use DICT_5X5_* or DICT_ARUCO_ORIGINAL")
+            raise ValueError("Cube marker must use DICT_4X4_*, DICT_5X5_* or DICT_ARUCO_ORIGINAL")
         if isinstance(marker_id, (bool, np.bool_)):
             raise ValueError("Marker ID must be an integer")
         try:
@@ -108,6 +110,7 @@ class Cube(SceneObject):
         if self.marker_dictionary is not None and self.marker_dictionary != dictionary:
             raise ValueError(f"Cube is already bound to {self.marker_dictionary}")
         self.marker_id, self.marker_dictionary = marker_id, dictionary
+        self.marker_family = "4x4" if dictionary.startswith("DICT_4X4_") else "5x5"
 
     def marker_mount_transform(self) -> np.ndarray:
         """Return T_cube_marker, including the centered top mounting and known yaw."""
